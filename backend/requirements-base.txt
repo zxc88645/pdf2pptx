@@ -1,6 +1,0 @@
-# API + Celery（輕量，變動時 rebuild 較快）
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-redis>=5.0.0
-python-multipart>=0.0.6
-celery[redis]>=5.3.0
