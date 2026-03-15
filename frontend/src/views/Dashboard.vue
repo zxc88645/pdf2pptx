@@ -334,41 +334,40 @@ const PAGE_ASPECT_RATIO = 485 / 271
           <p v-if="sidebarMessage" class="mt-2 text-xs text-slate-500">{{ sidebarMessage }}</p>
         </div>
 
-        <div class="bg-white rounded-lg shadow p-4">
-          <label class="block text-sm font-medium text-slate-700 mb-2">筆刷大小</label>
-          <input
-            v-model.number="brushSize"
-            type="range"
-            min="8"
-            max="80"
-            class="w-full"
-          />
-          <span class="text-xs text-slate-500">{{ brushSize }}px</span>
-        </div>
-
-        <div class="bg-white rounded-lg shadow p-4 space-y-2">
-          <button
-            type="button"
-            class="w-full px-4 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 disabled:opacity-50"
-            :disabled="!pdfFile || inpaintLoading"
-            @click="runInpaint"
-          >
-            {{ inpaintLoading ? '運算中…' : '執行 AI 抹除' }}
-          </button>
-          <button
-            type="button"
-            class="w-full px-4 py-2 rounded border border-slate-300 hover:bg-slate-50"
-            :disabled="!canvasSize.width"
-            @click="clearMask"
-          >
-            清除遮罩
-          </button>
-        </div>
       </aside>
 
       <!-- 主內容：預覽 + 遮罩疊加 -->
       <main class="flex-1 min-w-0">
         <div class="bg-white rounded-lg shadow p-4">
+          <div class="flex flex-wrap items-center gap-4 mb-3">
+            <div class="flex items-center gap-2">
+              <label class="text-sm font-medium text-slate-700 whitespace-nowrap">筆刷大小</label>
+              <input
+                v-model.number="brushSize"
+                type="range"
+                min="8"
+                max="80"
+                class="w-24"
+              />
+              <span class="text-xs text-slate-500">{{ brushSize }}px</span>
+            </div>
+            <button
+              type="button"
+              class="px-4 py-2 rounded-lg bg-slate-600 text-white hover:bg-slate-500 disabled:opacity-50 text-sm"
+              :disabled="!pdfFile || inpaintLoading"
+              @click="runInpaint"
+            >
+              {{ inpaintLoading ? '運算中…' : '執行 AI 抹除' }}
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 rounded border border-slate-300 hover:bg-slate-50 text-sm"
+              :disabled="!canvasSize.width"
+              @click="clearMask"
+            >
+              清除遮罩
+            </button>
+          </div>
           <div class="flex items-center justify-between mb-2">
             <h2 class="text-sm font-medium text-slate-700">預覽與遮罩（紅色區域為要抹除處）</h2>
             <div class="flex items-center gap-1">
