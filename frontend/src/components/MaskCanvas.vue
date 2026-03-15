@@ -20,13 +20,11 @@ function getCtx() {
   return c ? c.getContext('2d') : null
 }
 
-/** 筆刷預覽：依 canvas 與容器縮放算出螢幕上的直徑，fixed 定位跟隨游標 */
+/** 筆刷預覽：依 canvas object-contain 的實際顯示比例算出螢幕上的直徑，fixed 定位跟隨游標 */
 const brushPreviewStyle = computed(() => {
-  const c = canvasRef.value
-  const rect = containerRef.value?.getBoundingClientRect()
-  if (!c || !rect?.width || !c.width) return {}
-  const scale = rect.width / c.width
-  const diameterPx = Math.max(4, Math.round(2 * props.brushSize * scale))
+  const d = getCanvasDisplayRect()
+  if (!d) return {}
+  const diameterPx = Math.max(4, Math.round(2 * props.brushSize * d.scale))
   return {
     position: 'fixed',
     width: `${diameterPx}px`,
@@ -44,26 +42,59 @@ function clearToTransparent() {
   ctx.clearRect(0, 0, props.width, props.height)
 }
 
+/**
+ * 取得 canvas 在 object-contain 下的「實際顯示區」。
+ * 當圖片較高/較寬時，畫布會留白，滑鼠座標必須對應到顯示區而非整個元素框。
+ */
+function getCanvasDisplayRect() {
+  const c = canvasRef.value
+  if (!c?.width || !c?.height) return null
+  const rect = c.getBoundingClientRect()
+  const cw = c.width
+  const ch = c.height
+  const scale = Math.min(rect.width / cw, rect.height / ch)
+  const displayW = cw * scale
+  const displayH = ch * scale
+  const offsetX = (rect.width - displayW) / 2
+  const offsetY = (rect.height - displayH) / 2
+  return {
+    left: rect.left + offsetX,
+    top: rect.top + offsetY,
+    width: displayW,
+    height: displayH,
+    scale,
+  }
+}
+
+/** 從滑鼠或觸控事件取得螢幕座標 */
+function getClientPos(e) {
+  if (e.touches?.length) {
+    return { x: e.touches[0].clientX, y: e.touches[0].clientY }
+  }
+  return { x: e.clientX, y: e.clientY }
+}
+
 function updateCursor(e) {
   const rect = containerRef.value?.getBoundingClientRect()
   if (!rect) return
-  cursorScreen.value = { x: e.clientX, y: e.clientY }
-  showBrushPreview.value =
-    e.clientX >= rect.left &&
-    e.clientX <= rect.right &&
-    e.clientY >= rect.top &&
-    e.clientY <= rect.bottom
+  const { x, y } = getClientPos(e)
+  cursorScreen.value = { x, y }
+  showBrushPreview.value = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
 function draw(e) {
   const ctx = getCtx()
   if (!ctx || !drawing.value) return
+  const { x: clientX, y: clientY } = getClientPos(e)
   updateCursor(e)
-  const rect = canvasRef.value.getBoundingClientRect()
-  const scaleX = canvasRef.value.width / rect.width
-  const scaleY = canvasRef.value.height / rect.height
-  const x = (e.clientX - rect.left) * scaleX
-  const y = (e.clientY - rect.top) * scaleY
+  const d = getCanvasDisplayRect()
+  if (!d) return
+  // 滑鼠在「實際顯示區」內的座標 → 換算成 canvas 座標（object-contain 留白已扣除）
+  const canvasX = (clientX - d.left) / d.scale
+  const canvasY = (clientY - d.top) / d.scale
+  // 僅在畫布範圍內繪製，避免拖出邊界時畫到錯位
+  const x = Math.max(0, Math.min(props.width, canvasX))
+  const y = Math.max(0, Math.min(props.height, canvasY))
   // 使用醒目紅色半透明顯示，匯出時會轉成黑底白遮罩給 API
   ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
   ctx.beginPath()
