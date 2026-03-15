@@ -64,9 +64,11 @@ watch(appliedImageBlob, (blob) => {
   appliedImageUrl.value = blob ? URL.createObjectURL(blob) : ''
 }, { immediate: true })
 
-// 更換 PDF 時清空 store，避免與新檔混淆
+// 更換 PDF 時清空 store 與預覽相關狀態，避免與新檔混淆
 watch(pdfFile, () => {
   store.clearAll()
+  pageImageBlob.value = null
+  canvasSize.value = { width: 0, height: 0 }
 })
 
 function updatePreviewViewportSize() {

@@ -26,6 +26,8 @@ async function loadPdf(file) {
     totalPages.value = 0
     return
   }
+  pdfDoc.value = null
+  totalPages.value = 0
   loading.value = true
   try {
     const data = await file.arrayBuffer()
@@ -68,11 +70,24 @@ async function renderPage() {
   }
 }
 
+// 檔案變更時一律重新載入 PDF（換選其他檔案時必須清掉舊 doc 再載入新檔）
 watch(
-  () => [props.file, props.pageNum, props.scale],
+  () => props.file,
+  async (newFile) => {
+    try {
+      await loadPdf(newFile || null)
+    } catch (e) {
+      console.error('PdfViewer loadPdf:', e)
+    }
+  },
+  { immediate: true }
+)
+
+// 文件或頁面/縮放變更時重繪當前頁
+watch(
+  () => [pdfDoc.value, props.pageNum, props.scale],
   async () => {
     try {
-      if (props.file && !pdfDoc.value) await loadPdf(props.file)
       if (pdfDoc.value) {
         await nextTick() // 等 canvas 掛上 DOM 後再繪製
         await renderPage()
@@ -83,10 +98,6 @@ watch(
   },
   { immediate: true }
 )
-
-onMounted(() => {
-  if (props.file) loadPdf(props.file)
-})
 
 defineExpose({
   totalPages,
