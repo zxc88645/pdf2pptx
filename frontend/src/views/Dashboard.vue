@@ -391,7 +391,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
           </div>
           <div
             ref="previewContainerRef"
-            class="relative w-full max-w-full max-h-[60vh] bg-slate-100 rounded-lg overflow-auto"
+            class="relative w-full max-w-full max-h-[40vh] bg-slate-100 rounded-lg overflow-auto"
             :style="pdfFile ? { aspectRatio: PAGE_ASPECT_RATIO } : { minHeight: '200px' }"
           >
             <div
@@ -449,7 +449,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
           <img
             :src="resultImageUrl"
             alt="結果"
-            class="max-w-full w-full h-auto rounded border border-slate-200 object-contain"
+            class="max-w-full max-h-[40vh] w-full h-auto rounded border border-slate-200 object-contain"
             :style="{ aspectRatio: PAGE_ASPECT_RATIO }"
           />
           <div class="mt-3 flex flex-wrap gap-3 items-center">
