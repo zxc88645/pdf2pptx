@@ -27,6 +27,8 @@ const pdfViewerRef = ref(null)
 const maskCanvasRef = ref(null)
 const fileInputRef = ref(null)
 const isDragging = ref(false)
+/** 遮罩繪製模式：'brush' | 'rectangle' */
+const maskMode = ref('brush')
 
 /** 目前頁面的抹除結果（來自 store，換頁後仍保留） */
 const resultImageBlob = computed(() => store.getResult(currentPage.value))
@@ -390,7 +392,28 @@ const PAGE_ASPECT_RATIO = 485 / 271
         <div class="bg-white rounded-xl shadow-sm border border-slate-200/80 overflow-hidden">
           <!-- 工具列：筆刷 + 動作 -->
           <div class="flex flex-wrap items-center gap-4 px-4 py-3 bg-slate-50/90 border-b border-slate-200">
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium text-slate-600">工具</span>
+              <div class="flex rounded-lg border border-slate-300 bg-white p-0.5" role="tablist">
+                <button
+                  type="button"
+                  class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  :class="maskMode === 'brush' ? 'bg-slate-200 text-slate-800 shadow-sm' : 'text-slate-600 hover:bg-slate-100'"
+                  @click="maskMode = 'brush'"
+                >
+                  筆刷
+                </button>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  :class="maskMode === 'rectangle' ? 'bg-slate-200 text-slate-800 shadow-sm' : 'text-slate-600 hover:bg-slate-100'"
+                  @click="maskMode = 'rectangle'"
+                >
+                  框選
+                </button>
+              </div>
+            </div>
+            <div v-show="maskMode === 'brush'" class="flex items-center gap-3">
               <span class="text-sm font-medium text-slate-600">筆刷</span>
               <input
                 v-model.number="brushSize"
@@ -501,6 +524,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
                     :width="effectiveCanvasSize.width"
                     :height="effectiveCanvasSize.height"
                     :brush-size="brushSize"
+                    :mode="maskMode"
                   />
                 </div>
               </div>

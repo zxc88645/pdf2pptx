@@ -5,6 +5,8 @@ const props = defineProps({
   width: { type: Number, default: 0 },
   height: { type: Number, default: 0 },
   brushSize: { type: Number, default: 20 },
+  /** 'brush' | 'rectangle' */
+  mode: { type: String, default: 'brush' },
 })
 
 const emit = defineEmits(['maskBlob'])
@@ -14,6 +16,11 @@ const containerRef = ref(null)
 /** 與顯示 canvas 同步的黑白遮罩（黑底白筆觸），匯出時直接 toBlob，無需整張掃描 */
 const maskExportRef = ref(null)
 const drawing = ref(false)
+/** 框選模式：拖曳起點（canvas 座標） */
+const rectStart = ref(null)
+/** 框選模式：拖曳目前點（canvas 座標） */
+const rectCurrent = ref(null)
+const previewCanvasRef = ref(null)
 
 const MASK_EXPORT_MAX = 1024
 const cursorScreen = ref({ x: 0, y: 0 })
@@ -24,8 +31,9 @@ function getCtx() {
   return c ? c.getContext('2d') : null
 }
 
-/** 筆刷預覽：依 canvas object-contain 的實際顯示比例算出螢幕上的直徑，fixed 定位跟隨游標 */
+/** 筆刷預覽：依 canvas object-contain 的實際顯示比例算出螢幕上的直徑，fixed 定位跟隨游標（僅筆刷模式） */
 const brushPreviewStyle = computed(() => {
+  if (props.mode !== 'brush') return {}
   const d = getCanvasDisplayRect()
   if (!d) return {}
   const diameterPx = Math.max(4, Math.round(2 * props.brushSize * d.scale))
@@ -50,6 +58,7 @@ function clearToTransparent() {
     mCtx.fillStyle = '#000'
     mCtx.fillRect(0, 0, mask.width, mask.height)
   }
+  clearPreviewRect()
 }
 
 /** 取得遮罩 canvas 的尺寸與縮放比（匯出用，最長邊不超過 MASK_EXPORT_MAX） */
@@ -125,19 +134,34 @@ function updateCursor(e) {
   showBrushPreview.value = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
-function draw(e) {
-  const ctx = getCtx()
-  if (!ctx || !drawing.value) return
-  const { x: clientX, y: clientY } = getClientPos(e)
-  updateCursor(e)
+function toCanvasCoords(clientX, clientY) {
   const d = getCanvasDisplayRect()
-  if (!d) return
-  // 滑鼠在「實際顯示區」內的座標 → 換算成 canvas 座標（object-contain 留白已扣除）
+  if (!d) return null
   const canvasX = (clientX - d.left) / d.scale
   const canvasY = (clientY - d.top) / d.scale
-  // 僅在畫布範圍內繪製，避免拖出邊界時畫到錯位
-  const x = Math.max(0, Math.min(props.width, canvasX))
-  const y = Math.max(0, Math.min(props.height, canvasY))
+  return {
+    x: Math.max(0, Math.min(props.width, canvasX)),
+    y: Math.max(0, Math.min(props.height, canvasY)),
+  }
+}
+
+function draw(e) {
+  const { x: clientX, y: clientY } = getClientPos(e)
+  updateCursor(e)
+  const pt = toCanvasCoords(clientX, clientY)
+  if (!pt) return
+
+  if (props.mode === 'rectangle') {
+    if (drawing.value) {
+      rectCurrent.value = { x: pt.x, y: pt.y }
+      drawPreviewRect()
+    }
+    return
+  }
+
+  const ctx = getCtx()
+  if (!ctx || !drawing.value) return
+  const { x, y } = pt
   // 顯示用：醒目紅色半透明
   ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
   ctx.beginPath()
@@ -158,12 +182,75 @@ function draw(e) {
   }
 }
 
-function startDraw() {
+function startDraw(e) {
   drawing.value = true
+  if (props.mode === 'rectangle') {
+    const pt = toCanvasCoords(getClientPos(e).x, getClientPos(e).y)
+    if (pt) rectStart.value = { x: pt.x, y: pt.y }
+    rectCurrent.value = null
+  }
 }
 
 function endDraw() {
+  if (props.mode === 'rectangle' && drawing.value && rectStart.value && rectCurrent.value) {
+    commitRect()
+    clearPreviewRect()
+    rectStart.value = null
+    rectCurrent.value = null
+  }
   drawing.value = false
+}
+
+/** 框選預覽：在預覽 canvas 上畫出目前拖曳的矩形 */
+function drawPreviewRect() {
+  const p = previewCanvasRef.value
+  const start = rectStart.value
+  const current = rectCurrent.value
+  if (!p || !start || !current) return
+  const ctx = p.getContext('2d')
+  ctx.clearRect(0, 0, props.width, props.height)
+  const x1 = Math.min(start.x, current.x)
+  const y1 = Math.min(start.y, current.y)
+  const w = Math.abs(current.x - start.x)
+  const h = Math.abs(current.y - start.y)
+  if (w < 2 && h < 2) return
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.5)'
+  ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)'
+  ctx.lineWidth = 2
+  ctx.fillRect(x1, y1, w, h)
+  ctx.strokeRect(x1, y1, w, h)
+}
+
+function clearPreviewRect() {
+  const p = previewCanvasRef.value
+  if (p) p.getContext('2d')?.clearRect(0, 0, props.width, props.height)
+}
+
+/** 將框選矩形寫入顯示 canvas 與匯出遮罩 */
+function commitRect() {
+  const start = rectStart.value
+  const current = rectCurrent.value
+  if (!start || !current) return
+  const x1 = Math.min(start.x, current.x)
+  const y1 = Math.min(start.y, current.y)
+  const w = Math.max(1, Math.abs(current.x - start.x))
+  const h = Math.max(1, Math.abs(current.y - start.y))
+  const ctx = getCtx()
+  if (ctx) {
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
+    ctx.fillRect(x1, y1, w, h)
+  }
+  const mask = maskExportRef.value
+  if (mask?.width && mask?.height) {
+    const size = getMaskExportSize()
+    const mx1 = (x1 * size.width) / props.width
+    const my1 = (y1 * size.height) / props.height
+    const mw = Math.max(1, (w * size.width) / props.width)
+    const mh = Math.max(1, (h * size.height) / props.height)
+    const mCtx = mask.getContext('2d')
+    mCtx.fillStyle = '#fff'
+    mCtx.fillRect(mx1, my1, mw, mh)
+  }
 }
 
 function emitMask() {
@@ -183,6 +270,12 @@ watch(
         clearToTransparent()
         ensureMaskExportCanvas()
       }
+      const p = previewCanvasRef.value
+      if (p) {
+        p.width = props.width
+        p.height = props.height
+        p.getContext('2d')?.clearRect(0, 0, props.width, props.height)
+      }
     }
   },
   { immediate: true }
@@ -194,6 +287,10 @@ onMounted(() => {
     canvasRef.value.height = props.height
     clearToTransparent()
     ensureMaskExportCanvas()
+  }
+  if (previewCanvasRef.value && props.width && props.height) {
+    previewCanvasRef.value.width = props.width
+    previewCanvasRef.value.height = props.height
   }
   window.addEventListener('mouseup', endDraw)
   window.addEventListener('touchend', endDraw)
@@ -243,6 +340,14 @@ defineExpose({
       @mousemove="draw"
       @touchstart.passive="startDraw"
       @touchmove.prevent="draw"
+    />
+    <!-- 框選預覽層：拖曳時顯示矩形預覽，與主 canvas 同尺寸疊加 -->
+    <canvas
+      v-show="mode === 'rectangle'"
+      ref="previewCanvasRef"
+      class="absolute inset-0 w-full h-full object-contain pointer-events-none mask-canvas-overlay"
+      :width="width"
+      :height="height"
     />
     <!-- 筆刷預覽：Teleport 到 body 避免被外層 transform 影響，才能與實際滑鼠對齊 -->
     <Teleport to="body">

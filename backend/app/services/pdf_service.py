@@ -93,15 +93,23 @@ def get_full_page_images(
 ) -> List[bytes]:
     """
     取得完整文件的所有頁面圖（JPEG bytes，利於後續組 PDF 時保持小檔）。
-    有替換的頁面用 replacements[page_index]，其餘從 PDF 轉圖並轉成 JPEG。
+    有替換的頁面用 replacements[page_index]，並縮放至與原 PDF 該頁相同像素尺寸（依 DPI），
+    避免前端預覽解析度較低導致匯出 PDF 時替換頁面變小。
     """
+    if dpi is None:
+        dpi = PDF_DPI
     with fitz.open(pdf_path) as doc:
         total = len(doc)
     out: List[bytes] = []
     for i in range(total):
         if i in replacements:
-            # 前端傳來的替換圖（多為 PNG）也轉成 JPEG 以一致壓縮
-            out.append(_to_jpeg_bytes(replacements[i]))
+            # 先用與未替換頁相同的流程取得「標準尺寸」圖，再將替換圖縮放到完全相同像素，避免 1px 誤差
+            base_img = pdf_page_to_image(pdf_path, i, dpi=dpi)
+            target_w, target_h = base_img.size
+            pil = _ensure_pil(replacements[i])
+            if (pil.size[0], pil.size[1]) != (target_w, target_h):
+                pil = pil.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            out.append(_to_jpeg_bytes(pil))
         else:
             img = pdf_page_to_image(pdf_path, i, dpi=dpi)
             out.append(_to_jpeg_bytes(img))
