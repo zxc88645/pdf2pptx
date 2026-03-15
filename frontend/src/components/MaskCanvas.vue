@@ -11,7 +11,11 @@ const emit = defineEmits(['maskBlob'])
 
 const canvasRef = ref(null)
 const containerRef = ref(null)
+/** 與顯示 canvas 同步的黑白遮罩（黑底白筆觸），匯出時直接 toBlob，無需整張掃描 */
+const maskExportRef = ref(null)
 const drawing = ref(false)
+
+const MASK_EXPORT_MAX = 1024
 const cursorScreen = ref({ x: 0, y: 0 })
 const showBrushPreview = ref(false)
 
@@ -40,6 +44,45 @@ function clearToTransparent() {
   const ctx = getCtx()
   if (!ctx) return
   ctx.clearRect(0, 0, props.width, props.height)
+  const mask = maskExportRef.value
+  if (mask?.width && mask?.height) {
+    const mCtx = mask.getContext('2d')
+    mCtx.fillStyle = '#000'
+    mCtx.fillRect(0, 0, mask.width, mask.height)
+  }
+}
+
+/** 取得遮罩 canvas 的尺寸與縮放比（匯出用，最長邊不超過 MASK_EXPORT_MAX） */
+function getMaskExportSize() {
+  const w = props.width || 0
+  const h = props.height || 0
+  if (!w || !h) return null
+  const scale =
+    w <= MASK_EXPORT_MAX && h <= MASK_EXPORT_MAX
+      ? 1
+      : Math.min(MASK_EXPORT_MAX / w, MASK_EXPORT_MAX / h, 1)
+  return {
+    width: Math.round(w * scale),
+    height: Math.round(h * scale),
+    scaleX: scale,
+    scaleY: scale,
+  }
+}
+
+/** 確保 maskExportRef 存在且尺寸正確，並清成黑底 */
+function ensureMaskExportCanvas() {
+  const size = getMaskExportSize()
+  if (!size || !size.width || !size.height) return
+  let mask = maskExportRef.value
+  if (!mask || mask.width !== size.width || mask.height !== size.height) {
+    mask = document.createElement('canvas')
+    mask.width = size.width
+    mask.height = size.height
+    maskExportRef.value = mask
+  }
+  const ctx = mask.getContext('2d')
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, mask.width, mask.height)
 }
 
 /**
@@ -95,11 +138,24 @@ function draw(e) {
   // 僅在畫布範圍內繪製，避免拖出邊界時畫到錯位
   const x = Math.max(0, Math.min(props.width, canvasX))
   const y = Math.max(0, Math.min(props.height, canvasY))
-  // 使用醒目紅色半透明顯示，匯出時會轉成黑底白遮罩給 API
+  // 顯示用：醒目紅色半透明
   ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
   ctx.beginPath()
   ctx.arc(x, y, props.brushSize, 0, Math.PI * 2)
   ctx.fill()
+  // 即時更新匯出用黑白遮罩（同位置畫白點），匯出時無需再掃整張圖
+  const mask = maskExportRef.value
+  if (mask?.width && mask?.height) {
+    const size = getMaskExportSize()
+    const mx = (x * size.width) / props.width
+    const my = (y * size.height) / props.height
+    const mr = Math.max(1, (props.brushSize * size.width) / props.width)
+    const mCtx = mask.getContext('2d')
+    mCtx.fillStyle = '#fff'
+    mCtx.beginPath()
+    mCtx.arc(mx, my, mr, 0, Math.PI * 2)
+    mCtx.fill()
+  }
 }
 
 function startDraw() {
@@ -111,13 +167,9 @@ function endDraw() {
 }
 
 function emitMask() {
-  const c = canvasRef.value
-  if (!c || !c.width || !c.height) return
-  c.toBlob(
-    (blob) => emit('maskBlob', blob),
-    'image/png',
-    1
-  )
+  const mask = maskExportRef.value
+  if (!mask?.width || !mask?.height) return
+  mask.toBlob((blob) => emit('maskBlob', blob), 'image/png', 1)
 }
 
 watch(
@@ -129,6 +181,7 @@ watch(
         c.width = props.width
         c.height = props.height
         clearToTransparent()
+        ensureMaskExportCanvas()
       }
     }
   },
@@ -140,6 +193,7 @@ onMounted(() => {
     canvasRef.value.width = props.width
     canvasRef.value.height = props.height
     clearToTransparent()
+    ensureMaskExportCanvas()
   }
   window.addEventListener('mouseup', endDraw)
   window.addEventListener('touchend', endDraw)
@@ -155,53 +209,15 @@ function clearMask() {
   emitMask()
 }
 
-// 匯出遮罩時若尺寸過大，先以較小尺寸計算再交給 inpaint API 端 resize，可大幅減少 getImageData/迴圈/PNG 編碼時間
-const MASK_EXPORT_MAX = 1024
-
 defineExpose({
   getMaskBlob() {
     return new Promise((resolve) => {
-      const c = canvasRef.value
-      if (!c || !c.width || !c.height) {
+      const mask = maskExportRef.value
+      if (!mask?.width || !mask?.height) {
         resolve(null)
         return
       }
-      const w = c.width
-      const h = c.height
-      const scale =
-        w <= MASK_EXPORT_MAX && h <= MASK_EXPORT_MAX
-          ? 1
-          : Math.min(MASK_EXPORT_MAX / w, MASK_EXPORT_MAX / h, 1)
-      const outW = Math.round(w * scale)
-      const outH = Math.round(h * scale)
-      // 匯出時轉成黑底白遮罩：有塗抹處（任意非透明）→ 白，其餘 → 黑（API 需要）
-      const off = document.createElement('canvas')
-      off.width = outW
-      off.height = outH
-      const ctx = off.getContext('2d')
-      let imgData
-      if (scale < 1) {
-        ctx.drawImage(c, 0, 0, w, h, 0, 0, outW, outH)
-        imgData = ctx.getImageData(0, 0, outW, outH)
-      } else {
-        imgData = c.getContext('2d').getImageData(0, 0, outW, outH)
-      }
-      const data = imgData.data
-      const out = ctx.createImageData(outW, outH)
-      const outData = out.data
-      const threshold = 32
-      for (let i = 0; i < data.length; i += 4) {
-        const r = data[i]
-        const g = data[i + 1]
-        const b = data[i + 2]
-        const a = data[i + 3]
-        const isMask = a >= threshold || (r > threshold || g > threshold || b > threshold)
-        const v = isMask ? 255 : 0
-        outData[i] = outData[i + 1] = outData[i + 2] = v
-        outData[i + 3] = 255
-      }
-      ctx.putImageData(out, 0, 0)
-      off.toBlob((blob) => resolve(blob), 'image/png', 1)
+      mask.toBlob((blob) => resolve(blob), 'image/png', 1)
     })
   },
   clearMask,
