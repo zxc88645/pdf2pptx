@@ -1,6 +1,9 @@
 <script setup>
 import { ref } from 'vue'
+import { useToast } from '../composables/useToast'
 import { exportPdf, exportPdfFromPdf, exportPpt } from '../api/export'
+
+const toast = useToast()
 
 const props = defineProps({
   resultImageBlob: { type: Blob, default: null },
@@ -29,8 +32,10 @@ async function copyToClipboard() {
     const item = new ClipboardItem({ 'image/png': blob })
     await navigator.clipboard.write([item])
     message.value = '已複製到剪貼簿'
+    toast.success('已複製到剪貼簿')
   } catch (e) {
     message.value = '複製失敗: ' + (e.message || String(e))
+    toast.error('複製失敗: ' + (e.message || String(e)))
   } finally {
     copying.value = false
   }
@@ -50,8 +55,10 @@ async function downloadPdf() {
       a.click()
       URL.revokeObjectURL(url)
       message.value = 'PDF 已下載'
+      toast.success('PDF 已下載')
     } catch (e) {
       message.value = '匯出 PDF 失敗: ' + (e.message || String(e))
+      toast.error('匯出 PDF 失敗: ' + (e.message || String(e)))
     } finally {
       exportingPdf.value = false
     }
@@ -69,8 +76,10 @@ async function downloadPdf() {
       a.click()
       URL.revokeObjectURL(url)
       message.value = 'PDF 已下載'
+      toast.success('PDF 已下載')
     } catch (e) {
       message.value = '匯出 PDF 失敗: ' + (e.message || String(e))
+      toast.error('匯出 PDF 失敗: ' + (e.message || String(e)))
     } finally {
       exportingPdf.value = false
     }
@@ -96,8 +105,10 @@ async function downloadPpt() {
     a.click()
     URL.revokeObjectURL(url)
     message.value = 'PPT 已下載'
+    toast.success('PPT 已下載')
   } catch (e) {
     message.value = '匯出 PPT 失敗: ' + (e.message || String(e))
+    toast.error('匯出 PPT 失敗: ' + (e.message || String(e)))
   } finally {
     exportingPpt.value = false
   }

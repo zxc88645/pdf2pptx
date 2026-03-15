@@ -5,10 +5,12 @@ import PdfPageThumbnails from '../components/PdfPageThumbnails.vue'
 import MaskCanvas from '../components/MaskCanvas.vue'
 import ExportButtons from '../components/ExportButtons.vue'
 import { usePdfInpaintStore } from '../stores/pdfInpaint'
+import { useToast } from '../composables/useToast'
 import { inpaint } from '../api/inpaint'
 import { exportPdfFull, exportPptFull, exportPngZipFull } from '../api/export'
 
 const store = usePdfInpaintStore()
+const toast = useToast()
 
 const pdfFile = ref(null)
 const currentPage = ref(1)
@@ -145,6 +147,7 @@ async function runInpaint() {
   try {
     const blob = await inpaint(base, mask)
     store.setResult(currentPage.value, blob)
+    toast.success('AI 抹除完成')
     if (import.meta.env.DEV) {
       const apiMs = Math.round(performance.now() - t1)
       const totalMs = Math.round(performance.now() - t0)
@@ -152,6 +155,7 @@ async function runInpaint() {
     }
   } catch (e) {
     inpaintError.value = e.message || String(e)
+    toast.error(e.message || String(e))
   } finally {
     inpaintLoading.value = false
   }
@@ -167,6 +171,7 @@ function applyResult() {
   if (!blob) return
   store.setApplied(currentPage.value, blob)
   clearMask()
+  toast.success('已套用')
 }
 
 // 供 ExportButtons：目前頁面有結果則用該 blob，多頁時可改為依 store.pageNumbersWithContent 彙總
@@ -210,8 +215,10 @@ async function sidebarDownloadPdf() {
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 15000)
     sidebarMessage.value = 'PDF 已下載並於新分頁開啟'
+    toast.success('PDF 已下載')
   } catch (e) {
     sidebarMessage.value = '下載 PDF 失敗: ' + (e.message || String(e))
+    toast.error('下載 PDF 失敗: ' + (e.message || String(e)))
   } finally {
     sidebarExporting.value = ''
   }
@@ -233,8 +240,10 @@ async function sidebarDownloadPpt() {
     a.click()
     URL.revokeObjectURL(url)
     sidebarMessage.value = 'PPT 已下載'
+    toast.success('PPT 已下載')
   } catch (e) {
     sidebarMessage.value = '下載 PPT 失敗: ' + (e.message || String(e))
+    toast.error('下載 PPT 失敗: ' + (e.message || String(e)))
   } finally {
     sidebarExporting.value = ''
   }
@@ -256,8 +265,10 @@ async function sidebarDownloadPngZip() {
     a.click()
     URL.revokeObjectURL(url)
     sidebarMessage.value = 'PNG 壓縮檔已下載'
+    toast.success('PNG 壓縮檔已下載')
   } catch (e) {
     sidebarMessage.value = '下載壓縮檔失敗: ' + (e.message || String(e))
+    toast.error('下載壓縮檔失敗: ' + (e.message || String(e)))
   } finally {
     sidebarExporting.value = ''
   }
