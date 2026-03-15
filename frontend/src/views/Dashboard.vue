@@ -174,6 +174,11 @@ const allPageBlobs = computed(() =>
   resultImageBlob.value ? [resultImageBlob.value] : []
 )
 
+/** 供 ExportButtons 取得當前遮罩 Blob（在 script 內使用 Promise 避免模板 scope 無 Promise） */
+function getMaskBlobForExport() {
+  return maskCanvasRef.value?.getMaskBlob?.() ?? Promise.resolve(null)
+}
+
 /** 左側下載用：完整頁面替換表 (0-based 索引 → Blob)，僅包含有修改過的頁 */
 const fullExportReplacements = computed(() => {
   const out = {}
@@ -464,7 +469,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
               :pdf-file="pdfFile"
               :current-page-index="currentPageIndex"
               :all-page-blobs="allPageBlobs"
-              :get-mask-blob="() => maskCanvasRef?.value?.getMaskBlob?.() ?? Promise.resolve(null)"
+              :get-mask-blob="getMaskBlobForExport"
             />
           </div>
         </div>

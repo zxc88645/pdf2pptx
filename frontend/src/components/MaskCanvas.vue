@@ -155,6 +155,9 @@ function clearMask() {
   emitMask()
 }
 
+// 匯出遮罩時若尺寸過大，先以較小尺寸計算再交給 inpaint API 端 resize，可大幅減少 getImageData/迴圈/PNG 編碼時間
+const MASK_EXPORT_MAX = 1024
+
 defineExpose({
   getMaskBlob() {
     return new Promise((resolve) => {
@@ -163,15 +166,28 @@ defineExpose({
         resolve(null)
         return
       }
+      const w = c.width
+      const h = c.height
+      const scale =
+        w <= MASK_EXPORT_MAX && h <= MASK_EXPORT_MAX
+          ? 1
+          : Math.min(MASK_EXPORT_MAX / w, MASK_EXPORT_MAX / h, 1)
+      const outW = Math.round(w * scale)
+      const outH = Math.round(h * scale)
       // 匯出時轉成黑底白遮罩：有塗抹處（任意非透明）→ 白，其餘 → 黑（API 需要）
       const off = document.createElement('canvas')
-      off.width = c.width
-      off.height = c.height
+      off.width = outW
+      off.height = outH
       const ctx = off.getContext('2d')
-      const srcCtx = c.getContext('2d')
-      const imgData = srcCtx.getImageData(0, 0, c.width, c.height)
+      let imgData
+      if (scale < 1) {
+        ctx.drawImage(c, 0, 0, w, h, 0, 0, outW, outH)
+        imgData = ctx.getImageData(0, 0, outW, outH)
+      } else {
+        imgData = c.getContext('2d').getImageData(0, 0, outW, outH)
+      }
       const data = imgData.data
-      const out = ctx.createImageData(c.width, c.height)
+      const out = ctx.createImageData(outW, outH)
       const outData = out.data
       const threshold = 32
       for (let i = 0; i < data.length; i += 4) {

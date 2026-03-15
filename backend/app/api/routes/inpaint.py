@@ -28,14 +28,25 @@ async def inpaint(image: UploadFile = File(...), mask: UploadFile = File(...)):
         msk_path = tmp_path / "mask.png"
         content = await image.read()
         img_path.write_bytes(content)
+        image_bytes = len(content)
         content = await mask.read()
         msk_path.write_bytes(content)
+        mask_bytes = len(content)
         upload_sec = time.perf_counter() - t_upload_start
+
+        logger.info(
+            "inpaint 上傳: image %d bytes, mask %d bytes | 暫存 %s, %s",
+            image_bytes, mask_bytes, img_path, msk_path,
+        )
 
         t_run_start = time.perf_counter()
         try:
             png_bytes, inference_sec = run_inpaint(img_path, msk_path)
         except Exception as e:
+            logger.exception(
+                "inpaint run_inpaint 失敗: %s (image %d bytes, mask %d bytes)",
+                e, image_bytes, mask_bytes,
+            )
             raise HTTPException(500, f"Inpainting 失敗: {str(e)}")
         run_sec = time.perf_counter() - t_run_start
 

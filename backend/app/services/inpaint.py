@@ -32,16 +32,47 @@ def run_inpaint(image_path: Path, mask_path: Path) -> tuple[bytes, float]:
     init_image = Image.open(image_path).convert("RGB")
     mask_image = Image.open(mask_path).convert("L")
     orig_w, orig_h = init_image.size
+    mask_w, mask_h = mask_image.size
+
+    logger.info(
+        "inpaint 載入: image %s mode=%s size=(%d,%d) | mask mode=%s size=(%d,%d)",
+        image_path, init_image.mode, orig_w, orig_h, mask_image.mode, mask_w, mask_h,
+    )
+
+    # 強制以底圖尺寸為準，將 mask 縮放至與 image 一致，避免 "images do not match"
     if mask_image.size != (orig_w, orig_h):
+        logger.info(
+            "inpaint: mask 尺寸 (%d,%d) 與 image (%d,%d) 不一致，自動縮放 mask",
+            mask_w, mask_h, orig_w, orig_h,
+        )
         mask_image = mask_image.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+
     load_sec = time.perf_counter() - t_load_start
+    logger.info(
+        "inpaint 呼叫 LaMa 前: init_image.size=(%d,%d) mask_image.size=(%d,%d)",
+        init_image.size[0], init_image.size[1], mask_image.size[0], mask_image.size[1],
+    )
 
     lama = get_lama()
     t_infer_start = time.perf_counter()
-    result = lama(init_image, mask_image)
+    try:
+        result = lama(init_image, mask_image)
+    except Exception as e:
+        logger.exception(
+            "inpaint LaMa 呼叫例外: %s | init_image.size=%s mask_image.size=%s",
+            e, init_image.size, mask_image.size,
+        )
+        raise
     inference_sec = time.perf_counter() - t_infer_start
 
     t_compose_start = time.perf_counter()
+    # LaMa 可能回傳與輸入不同尺寸的 result（例如內部 pad 到 8 的倍數），需縮放回原圖尺寸再貼上
+    if result.size != (orig_w, orig_h):
+        logger.info(
+            "inpaint: LaMa 回傳 result.size=%s，縮放回 (%d,%d) 再合成",
+            result.size, orig_w, orig_h,
+        )
+        result = result.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
     output = init_image.copy()
     output.paste(result, (0, 0), mask=mask_image)
     buf = io.BytesIO()
