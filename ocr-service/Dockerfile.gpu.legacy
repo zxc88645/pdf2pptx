@@ -1,0 +1,24 @@
+# GPU 版本（舊款 GPU：sm_60-90，如 RTX 30/40 系列）
+# RTX 50 系列請使用 Dockerfile.gpu（sm_120）
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3-pip \
+    libgl1 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 安裝 PaddlePaddle GPU（CUDA 11.8，支援 sm_60-90）
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir paddlepaddle-gpu==3.2.0 \
+      -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+
+# 安裝其他依賴（排除 paddlepaddle）
+COPY requirements.txt .
+RUN grep -v '^paddlepaddle==' requirements.txt | python3 -m pip install --no-cache-dir -r /dev/stdin
+
+COPY main.py .
+
+EXPOSE 8001
+CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

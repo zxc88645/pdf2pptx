@@ -1,0 +1,57 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OCR_SERVICE_URL=http://ocr-service:8001
+      - INPAINT_SERVICE_URL=http://inpaint-service:8002
+      - MAX_PDF_PAGES=10
+    depends_on:
+      - ocr-service
+      - inpaint-service
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - API_PROXY_TARGET=http://backend:8000
+    depends_on:
+      - backend
+
+  ocr-service:
+    build: ./ocr-service
+    expose:
+      - "8001"
+    environment:
+      - USE_GPU=false
+      # 模型下載到 /data/ocr-cache，由 volume 持久化，僅首次下載
+      - HOME=/data/ocr-cache
+    volumes:
+      - ocr-models:/data/ocr-cache
+
+  inpaint-service:
+    build: ./inpaint-service
+    expose:
+      - "8002"
+    environment:
+      - INPAINT_BACKEND=lama
+      - INPAINT_CANVAS_SIZE=1024
+      - LAMA_CANVAS_SIZE=1024
+      - LAMA_MASK_DILATE=2
+      - INPAINT_SIZE=512
+      # 步數與強度偏保守，盡量避免生成新文字
+      - INPAINT_STEPS=30
+      - INPAINT_STRENGTH=0.65
+      - INPAINT_GUIDANCE=3.0
+      # 模型下載到 /data/hf-cache，由 volume 持久化，僅首次下載
+      - HF_HOME=/data/hf-cache
+    volumes:
+      - hf-cache:/data/hf-cache
+
+volumes:
+  ocr-models:   # PaddleOCR 模型（~/.paddleocr），僅首次部署下載
+  hf-cache:     # Hugging Face / Diffusers 模型，僅首次部署下載

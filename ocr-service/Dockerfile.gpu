@@ -1,0 +1,26 @@
+# GPU 版本：支援 RTX 50 系列 (sm_120 / Blackwell)
+# 官方 PaddlePaddle wheel 僅支援 sm_60-90，RTX 50 需使用社群編譯 sm_120 wheel
+# 舊款 GPU（sm_60-90）請改用 CPU 版或建立 Dockerfile.gpu.legacy
+FROM nvidia/cuda:13.1.1-cudnn-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3-pip \
+    libgl1 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# RTX 50 系列 (sm_120)：使用社群編譯的 PaddlePaddle GPU wheel
+# 參考：https://github.com/horhe-dvlp/paddlepaddle-sm120-wheels
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir \
+      https://github.com/horhe-dvlp/paddlepaddle-sm120-wheels/releases/download/v3.3.0-dev-sm120/paddlepaddle_gpu-3.3.0.dev20251209-cp310-cp310-linux_x86_64.whl
+
+# 安裝其他依賴（排除 paddlepaddle）
+COPY requirements.txt .
+RUN grep -v '^paddlepaddle==' requirements.txt | python3 -m pip install --no-cache-dir -r /dev/stdin
+
+COPY main.py .
+
+EXPOSE 8001
+CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

@@ -1,0 +1,13 @@
+# Podman GPU 覆寫：用 devices 傳遞 NVIDIA GPU（Podman 不支援 deploy.resources.reservations.devices）
+# 使用方式：podman compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.podman-gpu.yml up --build
+
+version: '3.8'
+
+services:
+  ocr-service:
+    devices:
+      - nvidia.com/gpu=all
+
+  inpaint-service:
+    devices:
+      - nvidia.com/gpu=all

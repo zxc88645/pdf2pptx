@@ -1,0 +1,9 @@
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+Pillow>=10.0.0
+numpy>=1.24.0
+# PaddleOCR 3.x：官方討論建議穩定組合，避免 oneDNN 錯誤
+# 參考：https://github.com/PaddlePaddle/PaddleOCR/discussions/17350
+paddlepaddle==3.2.0
+paddleocr==3.3.0
