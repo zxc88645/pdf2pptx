@@ -8,8 +8,8 @@ _def_output = str(_BASE / "outputs")
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", _def_upload))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", _def_output))
 
-# PDF 轉圖 DPI（愈高愈清晰，預設 200 減少失真）
-PDF_DPI = int(os.getenv("PDF_DPI", "200"))
+# PDF 轉圖 DPI（愈高愈清晰，預設 72 DPI）
+PDF_DPI = int(os.getenv("PDF_DPI", "72"))
 
 # 確保目錄存在
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
