@@ -8,8 +8,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 const props = defineProps({
   file: { type: File, default: null },
   pageNum: { type: Number, default: 1 },
-  /** 基礎縮放（會乘上 devicePixelRatio 以在高 DPI 螢幕輸出清晰圖，上限 4 避免過大 canvas） */
-  scale: { type: Number, default: 2 },
+  /**
+   * PDF.js 的 viewport scale：
+   * - scale = 1 代表 72 DPI（PDF points: 1pt = 1/72 inch）
+   * 目前固定 72 DPI 輸出，因此此參數保留但不影響渲染結果。
+   */
+  scale: { type: Number, default: 1 },
 })
 
 const emit = defineEmits(['update:pageNum', 'totalPages', 'pageImage', 'dimensions'])
@@ -49,10 +53,8 @@ async function renderPage() {
   const canvas = canvasRef.value
   if (!doc || !canvas || props.pageNum < 1 || props.pageNum > totalPages.value) return
   const page = await doc.getPage(props.pageNum)
-  // 高 DPI 螢幕用較高解析度渲染，匯出與顯示較清晰；上限 4 避免 canvas 過大
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-  const effectiveScale = Math.min(props.scale * dpr, 4)
-  const viewport = page.getViewport({ scale: effectiveScale })
+  // 固定 72 DPI：PDF.js scale=1 即為 72 DPI
+  const viewport = page.getViewport({ scale: 1 })
   canvas.width = viewport.width
   canvas.height = viewport.height
   const ctx = canvas.getContext('2d')
@@ -107,7 +109,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="relative w-full h-full min-h-[200px] flex items-center justify-center bg-slate-100 rounded-lg overflow-hidden">
+  <div class="relative w-full h-full min-h-50 flex items-center justify-center bg-slate-100 rounded-lg overflow-hidden">
     <template v-if="loading">載入中…</template>
     <template v-else-if="!file">請選擇 PDF 檔案</template>
     <template v-else-if="pdfDoc">
