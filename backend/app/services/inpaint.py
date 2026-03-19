@@ -86,4 +86,8 @@ def run_inpaint(image_path: Path, mask_path: Path) -> tuple[bytes, float]:
         "inpaint 細項: 載入圖 %.3fs | 推論 %.3fs | 合成存檔 %.3fs | 小計 %.3fs",
         load_sec, inference_sec, compose_sec, load_sec + inference_sec + compose_sec,
     )
+
+    # 本次推論所用的 Device 
+    logger.info("inpaint 使用裝置: %s", lama.device)
+    
     return out_bytes, inference_sec
