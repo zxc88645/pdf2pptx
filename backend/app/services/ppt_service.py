@@ -1,4 +1,5 @@
 import io
+import logging
 from pathlib import Path
 from typing import List, Union
 
@@ -6,6 +7,7 @@ from pptx import Presentation
 from pptx.util import Inches
 from PIL import Image
 
+logger = logging.getLogger(__name__)
 
 def _image_size_px(img: Union[Image.Image, bytes]) -> tuple[int, int]:
     """取得圖片像素尺寸 (width, height)。"""
@@ -21,12 +23,19 @@ def images_to_pptx(images: List[Union[Image.Image, bytes]], output_path: Path) -
         prs = Presentation()
         prs.save(str(output_path))
         return
+    
+    # 原始圖片像素尺寸
+    logger.info("原始圖片像素尺寸(px): %s", _image_size_px(images[0]))
+
     w_px, h_px = _image_size_px(images[0])
     # 以 72 DPI 換算：1 像素 = 1/72 英吋，使投影片尺寸與圖片一致
     prs = Presentation()
     prs.slide_width = Inches(w_px / 72)
     prs.slide_height = Inches(h_px / 72)
     blank = prs.slide_layouts[6]  # blank
+
+    # 投影片尺寸
+    logger.info("投影片尺寸: %s, %s", prs.slide_width, prs.slide_height)
 
     for img in images:
         if isinstance(img, Image.Image):
