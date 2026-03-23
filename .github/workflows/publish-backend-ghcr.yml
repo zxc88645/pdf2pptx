@@ -26,15 +26,15 @@ jobs:
             torch_index_url: https://download.pytorch.org/whl/cpu
           - variant: cuda12.4
             suffix: cuda12.4
-            base_image: nvidia/cuda:12.4-runtime-ubuntu22.04
+            base_image: nvidia/cuda:12.4.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu124
           - variant: cuda12.6
             suffix: cuda12.6
-            base_image: nvidia/cuda:12.6-runtime-ubuntu22.04
+            base_image: nvidia/cuda:12.6.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu126
           - variant: cuda12.8
             suffix: cuda12.8
-            base_image: nvidia/cuda:12.8-runtime-ubuntu22.04
+            base_image: nvidia/cuda:12.8.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu128
 
     steps:
