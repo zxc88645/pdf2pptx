@@ -1,0 +1,99 @@
+name: Publish Backend (GHCR multi-variants)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            suffix: cpu
+            base_image: ubuntu:22.04
+            torch_index_url: https://download.pytorch.org/whl/cpu
+          - variant: cuda12.4
+            suffix: cuda12.4
+            base_image: nvidia/cuda:12.4-runtime-ubuntu22.04
+            torch_index_url: https://download.pytorch.org/whl/cu124
+          - variant: cuda12.6
+            suffix: cuda12.6
+            base_image: nvidia/cuda:12.6-runtime-ubuntu22.04
+            torch_index_url: https://download.pytorch.org/whl/cu126
+          - variant: cuda12.8
+            suffix: cuda12.8
+            base_image: nvidia/cuda:12.8-runtime-ubuntu22.04
+            torch_index_url: https://download.pytorch.org/whl/cu128
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tagger
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/pdf2pptx-backend
+          SUFFIX: ${{ matrix.suffix }}
+          SHA_SHORT: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          sha_short="${SHA_SHORT:0:7}"
+          suffix="${SUFFIX}"
+
+          tags=""
+          tags+="${IMAGE}:main-${suffix}"$'\n'
+          tags+="${IMAGE}:sha-${sha_short}-${suffix}"$'\n'
+
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            rel="${RELEASE_REF}"
+            tags+="${IMAGE}:${rel}-${suffix}"$'\n'
+            # 額外 alias：cuda12.x / cpu 直接指向該變體
+            tags+="${IMAGE}:${suffix}"$'\n'
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            # 額外 alias：cuda12.x / cpu 直接指向該變體
+            tags+="${IMAGE}:${suffix}"$'\n'
+          fi
+
+          tags="$(echo -e "$tags" | sed '/^$/d')"
+
+          {
+            echo "tags<<EOF"
+            echo -e "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and (optionally) push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+            TORCH_INDEX_URL=${{ matrix.torch_index_url }}
+          tags: ${{ steps.tagger.outputs.tags }}
+

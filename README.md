@@ -30,6 +30,36 @@ npm run dev
 
 ---
 
+## GitHub Actions 部署
+
+### 前端（GitHub Pages）
+- 前端會在 `main` 推送後自動 build 並部署到專案頁面：`https://<user>.github.io/<repo>/`
+- 後端網址可透過 GitHub Repository Variables 控制：
+  - 設定 `VITE_API_BASE` 為你的後端 API 網址（例如 `https://your-backend.example.com`，不要結尾 `/`）
+  - 前端會自動組合 `/api/inpaint`、`/api/export/*` 等路徑
+- 需要在 GitHub 上把 Pages source 設定為「GitHub Actions」。
+
+### 後端（GHCR 容器）
+- 後端會自動建置並推送多變體映像到：`ghcr.io/<owner>/pdf2pptx-backend`
+- 版本由 tag 決定：
+  - 推送 `main` 時：`main-<suffix>` 與 `sha-<shortsha>-<suffix>`
+  - 發佈（release）時：`<release-tag>-<suffix>`（例如 `v1.2.3-cuda12.8`）
+  - 另外會提供 alias：`cpu`、`cuda12.4`、`cuda12.6`、`cuda12.8`（main/release 時更新）
+- 例子（部署到你自己的伺服器）：
+  - CPU：
+    ```bash
+    docker run -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cpu
+    ```
+  - CUDA 12.8（建議 GPU 主機搭配 `--gpus all`）：
+    ```bash
+    docker run --gpus all -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cuda12.8
+    ```
+- 後端可用的環境變數（見 `backend/.env.example`）：
+  - `PRELOAD_LAMA`：是否在啟動時預載 LaMa 模型
+  - `UPLOAD_DIR` / `OUTPUT_DIR`：暫存與輸出目錄
+
+---
+
 ## 後端
 
 使用 **Python 3.10+** 建立虛擬環境：
