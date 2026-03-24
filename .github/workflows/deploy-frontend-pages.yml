@@ -28,6 +28,16 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Show VITE_API_BASE
+        env:
+          VITE_API_BASE: ${{ vars.VITE_API_BASE }}
+        run: |
+          if [ -z "$VITE_API_BASE" ]; then
+            echo "VITE_API_BASE 未設定（空白），前端將以相對路徑呼叫 API"
+          else
+            echo "VITE_API_BASE=$VITE_API_BASE"
+          fi
+
       - name: Build frontend
         working-directory: frontend
         env:
