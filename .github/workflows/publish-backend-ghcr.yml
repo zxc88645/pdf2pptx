@@ -1,3 +1,7 @@
+# 後端 Docker 映像：依矩陣建置 CPU / 多種 CUDA 變體，推送到 GHCR。
+# - pull_request：僅建置（驗證 Dockerfile），不登入、不推送。
+# - push main / release / workflow_dispatch：建置並推送。
+
 name: Publish Backend (GHCR multi-variants)
 
 on:
@@ -9,6 +13,11 @@ on:
     types: [published]
   workflow_dispatch:
 
+# 同一 ref 上較新的執行會取消尚未完成的舊執行，避免矩陣任務排隊重複推送。
+concurrency:
+  group: publish-backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -16,24 +25,24 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/pdf2pptx-backend
     strategy:
       fail-fast: false
       matrix:
         include:
+          # variant 同時作為映像標籤後綴（例如 :main-cpu、:cuda12.4）
           - variant: cpu
-            suffix: cpu
             base_image: ubuntu:22.04
             torch_index_url: https://download.pytorch.org/whl/cpu
           - variant: cuda12.4
-            suffix: cuda12.4
             base_image: nvidia/cuda:12.4.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu124
           - variant: cuda12.6
-            suffix: cuda12.6
             base_image: nvidia/cuda:12.6.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu126
           - variant: cuda12.8
-            suffix: cuda12.8
             base_image: nvidia/cuda:12.8.0-runtime-ubuntu22.04
             torch_index_url: https://download.pytorch.org/whl/cu128
 
@@ -51,38 +60,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute tags
+      - name: Compute image tags
         id: tagger
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/pdf2pptx-backend
-          SUFFIX: ${{ matrix.suffix }}
+          VARIANT: ${{ matrix.variant }}
           SHA_SHORT: ${{ github.sha }}
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_REF: ${{ github.ref_name }}
         shell: bash
         run: |
+          set -euo pipefail
           sha_short="${SHA_SHORT:0:7}"
-          suffix="${SUFFIX}"
+          v="${VARIANT}"
 
-          tags=""
-          tags+="${IMAGE}:main-${suffix}"$'\n'
-          tags+="${IMAGE}:sha-${sha_short}-${suffix}"$'\n'
+          # 每個變體固定有 main-* 與 sha-* 標籤
+          lines=(
+            "${IMAGE}:main-${v}"
+            "${IMAGE}:sha-${sha_short}-${v}"
+          )
 
-          if [[ "${EVENT_NAME}" == "release" ]]; then
-            rel="${RELEASE_REF}"
-            tags+="${IMAGE}:${rel}-${suffix}"$'\n'
-            # 額外 alias：cuda12.x / cpu 直接指向該變體
-            tags+="${IMAGE}:${suffix}"$'\n'
-          elif [[ "${EVENT_NAME}" == "push" ]]; then
-            # 額外 alias：cuda12.x / cpu 直接指向該變體
-            tags+="${IMAGE}:${suffix}"$'\n'
-          fi
-
-          tags="$(echo -e "$tags" | sed '/^$/d')"
+          case "${EVENT_NAME}" in
+            release)
+              lines+=("${IMAGE}:${RELEASE_REF}-${v}")
+              # 發佈版：額外打上 :cpu / :cuda12.x 等簡短別名
+              lines+=("${IMAGE}:${v}")
+              ;;
+            push)
+              # main 推送：額外打上變體別名
+              lines+=("${IMAGE}:${v}")
+              ;;
+          esac
 
           {
             echo "tags<<EOF"
-            echo -e "$tags"
+            printf '%s\n' "${lines[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -96,4 +107,6 @@ jobs:
             BASE_IMAGE=${{ matrix.base_image }}
             TORCH_INDEX_URL=${{ matrix.torch_index_url }}
           tags: ${{ steps.tagger.outputs.tags }}
-
+          # 依變體分 scope，避免 CPU / CUDA 基底層互搶或汙染快取
+          cache-from: type=gha,scope=backend-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=backend-${{ matrix.variant }}
