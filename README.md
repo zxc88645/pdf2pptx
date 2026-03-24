@@ -112,6 +112,15 @@ docker build -t pdf2pptx-backend .
 docker run --gpus all -p 8000:8000 pdf2pptx-backend
 ```
 
+如果你要直接使用 GHCR 的映像檔（例如 CUDA 12.4），`docker pull` 只是下載，仍需要用 `docker run` 啟動服務：
+
+```bash
+docker pull ghcr.io/<owner>/pdf2pptx-backend:cuda12.4
+docker run --gpus all -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cuda12.4
+```
+
+啟動後可用 `GET http://localhost:8000/health` 確認服務是否正常（回傳 `cuda_available`）。
+
 無 GPU 時可省略 `--gpus all`，後端仍可於 CPU 運作（較慢）。可透過 `GET http://localhost:8000/health` 的 `cuda_available` 確認是否使用 GPU。
 
 ## 前端
