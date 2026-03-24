@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir torch torchvision --index-url ${TORCH_INDEX_URL} \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir opencv-python-headless
 COPY app ./app
 
 EXPOSE 8000
