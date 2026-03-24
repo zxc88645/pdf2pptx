@@ -2,6 +2,8 @@
 
 前後端分離架構：後端以 **LaMa（Large Mask Inpainting）** 進行圖像抹除，並支援 PDF/PPT 匯出；前端為 **Vue 3 + Tailwind CSS** 儀表板，可載入 PDF、選擇頁面、塗抹遮罩、執行 AI 抹除，並輸出 PDF、PPT 或複製到剪貼簿。
 
+**範例網站**：[https://zxc88645.github.io/pdf2pptx/](https://zxc88645.github.io/pdf2pptx/)
+
 ## 需求
 
 - **後端**：Python 3.10+、建議具備 CUDA GPU（可選，有則加速）
@@ -33,14 +35,14 @@ npm run dev
 ## GitHub Actions 部署
 
 ### 前端（GitHub Pages）
-- 前端會在 `main` 推送後自動 build 並部署到專案頁面：`https://<user>.github.io/<repo>/`
+- 前端會在 `main` 推送後自動 build 並部署到專案頁面：[https://zxc88645.github.io/pdf2pptx/](https://zxc88645.github.io/pdf2pptx/)
 - 後端網址可透過 GitHub Repository Variables 控制：
   - 設定 `VITE_API_BASE` 為你的後端 API 網址（例如 `https://your-backend.example.com`，不要結尾 `/`）
   - 前端會自動組合 `/api/inpaint`、`/api/export/*` 等路徑
 - 需要在 GitHub 上把 Pages source 設定為「GitHub Actions」。
 
 ### 後端（GHCR 容器）
-- 後端會自動建置並推送多變體映像到：`ghcr.io/<owner>/pdf2pptx-backend`
+- 後端會自動建置並推送多變體映像到：`ghcr.io/zxc88645/pdf2pptx-backend`
 - 版本由 tag 決定：
   - 推送 `main` 時：`main-<suffix>` 與 `sha-<shortsha>-<suffix>`
   - 發佈（release）時：`<release-tag>-<suffix>`（例如 `v1.2.3-cuda12.8`）
@@ -48,11 +50,11 @@ npm run dev
 - 例子（部署到你自己的伺服器）：
   - CPU：
     ```bash
-    docker run -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cpu
+    docker run -p 8000:8000 ghcr.io/zxc88645/pdf2pptx-backend:cpu
     ```
   - CUDA 12.8（建議 GPU 主機搭配 `--gpus all`）：
     ```bash
-    docker run --gpus all -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cuda12.8
+    docker run --gpus all -p 8000:8000 ghcr.io/zxc88645/pdf2pptx-backend:cuda12.8
     ```
 - 後端可用的環境變數（見 `backend/.env.example`）：
   - `PRELOAD_LAMA`：是否在啟動時預載 LaMa 模型
@@ -115,8 +117,8 @@ docker run --gpus all -p 8000:8000 pdf2pptx-backend
 如果你要直接使用 GHCR 的映像檔（例如 CUDA 12.4），`docker pull` 只是下載，仍需要用 `docker run` 啟動服務：
 
 ```bash
-docker pull ghcr.io/<owner>/pdf2pptx-backend:cuda12.4
-docker run --gpus all -p 8000:8000 ghcr.io/<owner>/pdf2pptx-backend:cuda12.4
+docker pull ghcr.io/zxc88645/pdf2pptx-backend:cuda12.4
+docker run --gpus all -p 8000:8000 ghcr.io/zxc88645/pdf2pptx-backend:cuda12.4
 ```
 
 啟動後可用 `GET http://localhost:8000/health` 確認服務是否正常（回傳 `cuda_available`）。
