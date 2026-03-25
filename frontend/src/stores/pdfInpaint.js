@@ -12,6 +12,8 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
   const resultByPage = ref({})
   /** 各頁畫布尺寸（PdfViewer 回傳），顯示已套用圖時沿用該頁尺寸 */
   const dimensionsByPage = ref({})
+  /** 各頁遮罩快照（顯示層與匯出層），供切頁後還原 */
+  const maskSnapshotByPage = ref({})
 
   function setDimensions(pageNum, width, height) {
     if (width && height) dimensionsByPage.value[pageNum] = { width, height }
@@ -37,11 +39,26 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
     return resultByPage.value[pageNum] ?? null
   }
 
+  function setMaskSnapshot(pageNum, snapshot) {
+    if (snapshot?.overlayDataUrl && snapshot?.maskDataUrl) {
+      maskSnapshotByPage.value[pageNum] = snapshot
+    }
+  }
+
+  function getMaskSnapshot(pageNum) {
+    return maskSnapshotByPage.value[pageNum] ?? null
+  }
+
+  function clearMaskSnapshot(pageNum) {
+    delete maskSnapshotByPage.value[pageNum]
+  }
+
   /** 更換 PDF 檔案時呼叫，清空所有頁面的套用／結果與尺寸，避免與新檔混淆 */
   function clearAll() {
     appliedByPage.value = {}
     resultByPage.value = {}
     dimensionsByPage.value = {}
+    maskSnapshotByPage.value = {}
   }
 
   /** 目前有套用或結果的頁碼集合，供匯出多頁時使用 */
@@ -57,12 +74,16 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
     appliedByPage,
     resultByPage,
     dimensionsByPage,
+    maskSnapshotByPage,
     setDimensions,
     getDimensions,
     setApplied,
     getApplied,
     setResult,
     getResult,
+    setMaskSnapshot,
+    getMaskSnapshot,
+    clearMaskSnapshot,
     clearAll,
     pageNumbersWithContent,
   }

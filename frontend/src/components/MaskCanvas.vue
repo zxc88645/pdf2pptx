@@ -5,11 +5,11 @@ const props = defineProps({
   width: { type: Number, default: 0 },
   height: { type: Number, default: 0 },
   brushSize: { type: Number, default: 20 },
-  /** 'brush' | 'rectangle' */
+  /** 'brush' | 'eraser' | 'rectangle' | 'rectangleBatch' */
   mode: { type: String, default: 'brush' },
 })
 
-const emit = defineEmits(['maskBlob'])
+const emit = defineEmits(['maskBlob', 'rectCommit'])
 
 const canvasRef = ref(null)
 const containerRef = ref(null)
@@ -31,9 +31,18 @@ function getCtx() {
   return c ? c.getContext('2d') : null
 }
 
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = dataUrl
+  })
+}
+
 /** 筆刷預覽：依 canvas object-contain 的實際顯示比例算出螢幕上的直徑，fixed 定位跟隨游標（僅筆刷模式） */
 const brushPreviewStyle = computed(() => {
-  if (props.mode !== 'brush') return {}
+  if (props.mode !== 'brush' && props.mode !== 'eraser') return {}
   const d = getCanvasDisplayRect()
   if (!d) return {}
   const diameterPx = Math.max(4, Math.round(2 * props.brushSize * d.scale))
@@ -151,7 +160,7 @@ function draw(e) {
   const pt = toCanvasCoords(clientX, clientY)
   if (!pt) return
 
-  if (props.mode === 'rectangle') {
+  if (props.mode === 'rectangle' || props.mode === 'rectangleBatch') {
     if (drawing.value) {
       rectCurrent.value = { x: pt.x, y: pt.y }
       drawPreviewRect()
@@ -162,11 +171,21 @@ function draw(e) {
   const ctx = getCtx()
   if (!ctx || !drawing.value) return
   const { x, y } = pt
-  // 顯示用：醒目紅色半透明
-  ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
-  ctx.beginPath()
-  ctx.arc(x, y, props.brushSize, 0, Math.PI * 2)
-  ctx.fill()
+  const isEraser = props.mode === 'eraser'
+  if (isEraser) {
+    ctx.save()
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.beginPath()
+    ctx.arc(x, y, props.brushSize, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  } else {
+    // 顯示用：醒目紅色半透明
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
+    ctx.beginPath()
+    ctx.arc(x, y, props.brushSize, 0, Math.PI * 2)
+    ctx.fill()
+  }
   // 即時更新匯出用黑白遮罩（同位置畫白點），匯出時無需再掃整張圖
   const mask = maskExportRef.value
   if (mask?.width && mask?.height) {
@@ -175,25 +194,62 @@ function draw(e) {
     const my = (y * size.height) / props.height
     const mr = Math.max(1, (props.brushSize * size.width) / props.width)
     const mCtx = mask.getContext('2d')
-    mCtx.fillStyle = '#fff'
-    mCtx.beginPath()
-    mCtx.arc(mx, my, mr, 0, Math.PI * 2)
-    mCtx.fill()
+    if (isEraser) {
+      mCtx.save()
+      mCtx.globalCompositeOperation = 'destination-out'
+      mCtx.beginPath()
+      mCtx.arc(mx, my, mr, 0, Math.PI * 2)
+      mCtx.fill()
+      mCtx.restore()
+      mCtx.save()
+      mCtx.globalCompositeOperation = 'destination-over'
+      mCtx.fillStyle = '#000'
+      mCtx.fillRect(0, 0, mask.width, mask.height)
+      mCtx.restore()
+    } else {
+      mCtx.fillStyle = '#fff'
+      mCtx.beginPath()
+      mCtx.arc(mx, my, mr, 0, Math.PI * 2)
+      mCtx.fill()
+    }
   }
 }
 
 function startDraw(e) {
   drawing.value = true
-  if (props.mode === 'rectangle') {
+  if (props.mode === 'rectangle' || props.mode === 'rectangleBatch') {
     const pt = toCanvasCoords(getClientPos(e).x, getClientPos(e).y)
     if (pt) rectStart.value = { x: pt.x, y: pt.y }
     rectCurrent.value = null
   }
 }
 
+/** 由框選拖曳取得正規化矩形（canvas 座標），過小則回傳 null */
+function getRectFromDrag() {
+  const start = rectStart.value
+  const current = rectCurrent.value
+  if (!start || !current) return null
+  const x1 = Math.min(start.x, current.x)
+  const y1 = Math.min(start.y, current.y)
+  const w = Math.abs(current.x - start.x)
+  const h = Math.abs(current.y - start.y)
+  if (w < 2 || h < 2) return null
+  return { x: x1, y: y1, width: Math.max(1, w), height: Math.max(1, h) }
+}
+
 function endDraw() {
-  if (props.mode === 'rectangle' && drawing.value && rectStart.value && rectCurrent.value) {
-    commitRect()
+  if (
+    (props.mode === 'rectangle' || props.mode === 'rectangleBatch') &&
+    drawing.value &&
+    rectStart.value &&
+    rectCurrent.value
+  ) {
+    if (props.mode === 'rectangle') {
+      commitRect()
+    } else {
+      const r = getRectFromDrag()
+      if (r) emit('rectCommit', r)
+    }
     clearPreviewRect()
     rectStart.value = null
     rectCurrent.value = null
@@ -214,8 +270,9 @@ function drawPreviewRect() {
   const w = Math.abs(current.x - start.x)
   const h = Math.abs(current.y - start.y)
   if (w < 2 && h < 2) return
-  ctx.fillStyle = 'rgba(220, 38, 38, 0.5)'
-  ctx.strokeStyle = 'rgba(220, 38, 38, 0.95)'
+  const batch = props.mode === 'rectangleBatch'
+  ctx.fillStyle = batch ? 'rgba(14, 165, 233, 0.35)' : 'rgba(220, 38, 38, 0.5)'
+  ctx.strokeStyle = batch ? 'rgba(2, 132, 199, 0.95)' : 'rgba(220, 38, 38, 0.95)'
   ctx.lineWidth = 2
   ctx.fillRect(x1, y1, w, h)
   ctx.strokeRect(x1, y1, w, h)
@@ -317,6 +374,94 @@ defineExpose({
       mask.toBlob((blob) => resolve(blob), 'image/png', 1)
     })
   },
+  removeRectMask(rect) {
+    const x = Number(rect?.x ?? 0)
+    const y = Number(rect?.y ?? 0)
+    const w = Number(rect?.width ?? 0)
+    const h = Number(rect?.height ?? 0)
+    if (w <= 0 || h <= 0) return
+    const x1 = Math.max(0, Math.min(props.width, x))
+    const y1 = Math.max(0, Math.min(props.height, y))
+    const x2 = Math.max(0, Math.min(props.width, x + w))
+    const y2 = Math.max(0, Math.min(props.height, y + h))
+    const cw = Math.max(1, x2 - x1)
+    const ch = Math.max(1, y2 - y1)
+    const ctx = getCtx()
+    if (ctx) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.fillStyle = 'rgba(0, 0, 0, 1)'
+      ctx.fillRect(x1, y1, cw, ch)
+      ctx.restore()
+    }
+    const mask = maskExportRef.value
+    if (mask?.width && mask?.height) {
+      const size = getMaskExportSize()
+      const mx = (x1 * size.width) / props.width
+      const my = (y1 * size.height) / props.height
+      const mw = Math.max(1, (cw * size.width) / props.width)
+      const mh = Math.max(1, (ch * size.height) / props.height)
+      const mCtx = mask.getContext('2d')
+      mCtx.fillStyle = '#000'
+      mCtx.fillRect(mx, my, mw, mh)
+    }
+  },
+  applyRectMask(rect) {
+    const x = Number(rect?.x ?? 0)
+    const y = Number(rect?.y ?? 0)
+    const w = Number(rect?.width ?? 0)
+    const h = Number(rect?.height ?? 0)
+    if (w <= 0 || h <= 0) return
+    const x1 = Math.max(0, Math.min(props.width, x))
+    const y1 = Math.max(0, Math.min(props.height, y))
+    const x2 = Math.max(0, Math.min(props.width, x + w))
+    const y2 = Math.max(0, Math.min(props.height, y + h))
+    const cw = Math.max(1, x2 - x1)
+    const ch = Math.max(1, y2 - y1)
+    const ctx = getCtx()
+    if (ctx) {
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.75)'
+      ctx.fillRect(x1, y1, cw, ch)
+    }
+    const mask = maskExportRef.value
+    if (mask?.width && mask?.height) {
+      const size = getMaskExportSize()
+      const mx = (x1 * size.width) / props.width
+      const my = (y1 * size.height) / props.height
+      const mw = Math.max(1, (cw * size.width) / props.width)
+      const mh = Math.max(1, (ch * size.height) / props.height)
+      const mCtx = mask.getContext('2d')
+      mCtx.fillStyle = '#fff'
+      mCtx.fillRect(mx, my, mw, mh)
+    }
+  },
+  exportMaskSnapshot() {
+    const overlay = canvasRef.value
+    const mask = maskExportRef.value
+    if (!overlay?.width || !overlay?.height || !mask?.width || !mask?.height) return null
+    return {
+      overlayDataUrl: overlay.toDataURL('image/png'),
+      maskDataUrl: mask.toDataURL('image/png'),
+    }
+  },
+  async importMaskSnapshot(snapshot) {
+    const overlay = canvasRef.value
+    const mask = maskExportRef.value
+    if (!overlay || !mask) return
+    clearToTransparent()
+    if (!snapshot?.overlayDataUrl || !snapshot?.maskDataUrl) return
+    const [overlayImg, maskImg] = await Promise.all([
+      loadImageFromDataUrl(snapshot.overlayDataUrl),
+      loadImageFromDataUrl(snapshot.maskDataUrl),
+    ])
+    const oCtx = overlay.getContext('2d')
+    const mCtx = mask.getContext('2d')
+    oCtx.clearRect(0, 0, overlay.width, overlay.height)
+    oCtx.drawImage(overlayImg, 0, 0, overlay.width, overlay.height)
+    mCtx.fillStyle = '#000'
+    mCtx.fillRect(0, 0, mask.width, mask.height)
+    mCtx.drawImage(maskImg, 0, 0, mask.width, mask.height)
+  },
   clearMask,
   emitMask,
 })
@@ -343,7 +488,7 @@ defineExpose({
     />
     <!-- 框選預覽層：拖曳時顯示矩形預覽，與主 canvas 同尺寸疊加 -->
     <canvas
-      v-show="mode === 'rectangle'"
+      v-show="mode === 'rectangle' || mode === 'rectangleBatch'"
       ref="previewCanvasRef"
       class="absolute inset-0 w-full h-full object-contain pointer-events-none mask-canvas-overlay"
       :width="width"

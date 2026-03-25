@@ -6,6 +6,7 @@ import MaskCanvas from '../components/MaskCanvas.vue'
 import ExportButtons from '../components/ExportButtons.vue'
 import { usePdfInpaintStore } from '../stores/pdfInpaint'
 import { useToast } from '../composables/useToast'
+import { useOcr } from '../composables/useOcr'
 import { inpaint } from '../api/inpaint'
 import { exportPdfFull, exportPptFull, exportPngZipFull } from '../api/export'
 
@@ -27,8 +28,12 @@ const pdfViewerRef = ref(null)
 const maskCanvasRef = ref(null)
 const fileInputRef = ref(null)
 const isDragging = ref(false)
-/** 遮罩繪製模式：'brush' | 'rectangle' */
+/** 遮罩繪製模式：'brush' | 'eraser' | 'rectangle' | 'rectangleBatch' */
 const maskMode = ref('brush')
+const ocrItems = ref([])
+const ocrError = ref('')
+const selectedOcrIds = ref(new Set())
+const { loading: ocrLoading, recognizeFromBlob } = useOcr()
 
 /** 目前頁面的抹除結果（來自 store，換頁後仍保留） */
 const resultImageBlob = computed(() => store.getResult(currentPage.value))
@@ -75,6 +80,8 @@ watch(pdfFile, () => {
   store.clearAll()
   pageImageBlob.value = null
   canvasSize.value = { width: 0, height: 0 }
+  ocrItems.value = []
+  selectedOcrIds.value = new Set()
 })
 
 function updatePreviewViewportSize() {
@@ -200,6 +207,8 @@ async function runInpaint() {
 
 function clearMask() {
   maskCanvasRef.value?.clearMask()
+  store.clearMaskSnapshot(currentPage.value)
+  selectedOcrIds.value = new Set()
 }
 
 /** 套用抹除結果：寫入 store，該頁預覽底圖改為結果圖，換頁後再回來仍保留 */
@@ -210,6 +219,127 @@ function applyResult() {
   clearMask()
   toast.success('已套用')
 }
+
+function normalizeRect(rect) {
+  const width = effectiveCanvasSize.value.width || 0
+  const height = effectiveCanvasSize.value.height || 0
+  if (!width || !height) return null
+  const x = Math.max(0, Math.min(width, Number(rect?.x ?? 0)))
+  const y = Math.max(0, Math.min(height, Number(rect?.y ?? 0)))
+  const w = Math.max(1, Number(rect?.width ?? 0))
+  const h = Math.max(1, Number(rect?.height ?? 0))
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.min(width - x, w)),
+    height: Math.max(1, Math.min(height - y, h)),
+  }
+}
+
+function toggleOcrMask(item) {
+  const rect = normalizeRect(item?.rect)
+  if (!rect) return
+  const next = new Set(selectedOcrIds.value)
+  if (next.has(item.id)) {
+    next.delete(item.id)
+    selectedOcrIds.value = next
+    maskCanvasRef.value?.removeRectMask?.(rect)
+  } else {
+    maskCanvasRef.value?.applyRectMask?.(rect)
+    next.add(item.id)
+    selectedOcrIds.value = next
+  }
+}
+
+function rectsIntersect(a, b) {
+  return !(
+    a.x + a.width <= b.x ||
+    b.x + b.width <= a.x ||
+    a.y + a.height <= b.y ||
+    b.y + b.height <= a.y
+  )
+}
+
+function onMaskRectCommit(rect) {
+  if (maskMode.value !== 'rectangleBatch') return
+  const sel = normalizeRect(rect)
+  if (!sel) return
+  if (!ocrItems.value.length) {
+    toast.error('請先按「辨識」產生 OCR 區塊')
+    return
+  }
+  const next = new Set(selectedOcrIds.value)
+  let count = 0
+  for (const item of ocrItems.value) {
+    const r = normalizeRect(item.rect)
+    if (!r || !rectsIntersect(sel, r)) continue
+    maskCanvasRef.value?.applyRectMask?.(r)
+    next.add(item.id)
+    count++
+  }
+  selectedOcrIds.value = next
+  if (count > 0) toast.success(`已為 ${count} 個 OCR 區塊加上遮罩`)
+  else toast.error('框選範圍內沒有 OCR 區塊')
+}
+
+function clearOcrItems() {
+  ocrItems.value = []
+  selectedOcrIds.value = new Set()
+  ocrError.value = ''
+}
+
+async function runOcr() {
+  const base = effectivePageBlob.value
+  if (!base) {
+    ocrError.value = '請先載入 PDF 並選擇頁面'
+    return
+  }
+  ocrError.value = ''
+  try {
+    const items = await recognizeFromBlob(base)
+    ocrItems.value = items
+    selectedOcrIds.value = new Set()
+    if (!items.length) {
+      toast.error('此頁未辨識到可用文字區塊')
+    } else {
+      toast.success(`辨識完成，共 ${items.length} 個區塊`)
+    }
+  } catch (e) {
+    ocrError.value = e?.message || String(e)
+    toast.error(ocrError.value)
+  }
+}
+
+async function saveMaskSnapshot(pageNum) {
+  if (!pageNum || !maskCanvasRef.value?.exportMaskSnapshot) return
+  const snapshot = maskCanvasRef.value.exportMaskSnapshot()
+  if (snapshot) store.setMaskSnapshot(pageNum, snapshot)
+}
+
+async function restoreMaskSnapshot(pageNum) {
+  await nextTick()
+  const canvas = maskCanvasRef.value
+  if (!canvas) return
+  const snapshot = store.getMaskSnapshot(pageNum)
+  if (snapshot) await canvas.importMaskSnapshot?.(snapshot)
+  else canvas.clearMask?.()
+}
+
+watch(currentPage, async (nextPage, prevPage) => {
+  if (prevPage && prevPage !== nextPage) {
+    await saveMaskSnapshot(prevPage)
+  }
+  clearOcrItems()
+  await restoreMaskSnapshot(nextPage)
+})
+
+watch(
+  () => [effectiveCanvasSize.value.width, effectiveCanvasSize.value.height],
+  async () => {
+    if (!effectiveCanvasSize.value.width || !effectiveCanvasSize.value.height) return
+    await restoreMaskSnapshot(currentPage.value)
+  }
+)
 
 // 供 ExportButtons：目前頁面有結果則用該 blob，多頁時可改為依 store.pageNumbersWithContent 彙總
 const allPageBlobs = computed(() =>
@@ -319,7 +449,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
   <div class="min-h-screen bg-slate-100">
     <header class="bg-slate-800 text-white px-6 py-5 shadow-lg">
       <h1 class="text-2xl font-bold tracking-tight">PDF 抹除儀表板</h1>
-      <p class="text-slate-300 text-sm mt-1.5">載入 PDF → 選擇頁面 → 塗抹遮罩 → AI 抹除 → 輸出 PDF / PPT / 剪貼簿</p>
+      <p class="text-slate-300 text-sm mt-1.5">載入 PDF → 選擇頁面 → OCR 辨識區塊上遮罩 / 手動畫遮罩 → AI 抹除 → 輸出 PDF / PPT / 剪貼簿</p>
     </header>
 
     <div class="flex flex-1 gap-5 p-5">
@@ -411,9 +541,32 @@ const PAGE_ASPECT_RATIO = 485 / 271
                 >
                   框選
                 </button>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  :class="maskMode === 'rectangleBatch' ? 'bg-slate-200 text-slate-800 shadow-sm' : 'text-slate-600 hover:bg-slate-100'"
+                  title="拖曳框選後，將範圍內所有 OCR 區塊一次套上遮罩（需先辨識）"
+                  @click="maskMode = 'rectangleBatch'"
+                >
+                  批次框選
+                </button>
+                <button
+                  type="button"
+                  class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                  :class="maskMode === 'eraser' ? 'bg-slate-200 text-slate-800 shadow-sm' : 'text-slate-600 hover:bg-slate-100'"
+                  @click="maskMode = 'eraser'"
+                >
+                  橡皮擦
+                </button>
               </div>
             </div>
-            <div v-show="maskMode === 'brush'" class="flex items-center gap-3">
+            <p
+              v-if="maskMode === 'rectangleBatch'"
+              class="w-full text-xs text-sky-700 bg-sky-50 border border-sky-200 rounded-md px-2 py-1.5"
+            >
+              批次框選：在預覽上拖曳矩形，放開後會對範圍內的 OCR 區塊逐一上遮罩（請先按「辨識」）。
+            </p>
+            <div v-show="maskMode === 'brush' || maskMode === 'eraser'" class="flex items-center gap-3">
               <span class="text-sm font-medium text-slate-600">筆刷</span>
               <input
                 v-model.number="brushSize"
@@ -426,6 +579,14 @@ const PAGE_ASPECT_RATIO = 485 / 271
             </div>
             <div class="h-5 w-px bg-slate-300 hidden sm:block" aria-hidden="true" />
             <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
+                :disabled="!pdfFile || !effectivePageBlob || ocrLoading"
+                @click="runOcr"
+              >
+                {{ ocrLoading ? '辨識中…' : '辨識' }}
+              </button>
               <button
                 type="button"
                 class="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
@@ -525,13 +686,42 @@ const PAGE_ASPECT_RATIO = 485 / 271
                     :height="effectiveCanvasSize.height"
                     :brush-size="brushSize"
                     :mode="maskMode"
+                    @rect-commit="onMaskRectCommit"
                   />
+                  <svg
+                    v-if="ocrItems.length && effectiveCanvasSize.width && effectiveCanvasSize.height"
+                    class="absolute inset-0 w-full h-full pointer-events-none"
+                    :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
+                    preserveAspectRatio="xMidYMid meet"
+                  >
+                    <g v-for="item in ocrItems" :key="item.id" @click.stop="toggleOcrMask(item)">
+                      <rect
+                        :x="item.rect.x"
+                        :y="item.rect.y"
+                        :width="item.rect.width"
+                        :height="item.rect.height"
+                        :fill="selectedOcrIds.has(item.id) ? 'rgba(16, 185, 129, 0.25)' : 'rgba(59, 130, 246, 0.18)'"
+                        :stroke="selectedOcrIds.has(item.id) ? 'rgba(5, 150, 105, 0.95)' : 'rgba(37, 99, 235, 0.95)'"
+                        stroke-width="1.5"
+                        class="cursor-pointer pointer-events-auto"
+                      />
+                    </g>
+                  </svg>
                 </div>
               </div>
             </div>
           </div>
           </div>
           <p v-if="inpaintError" class="mt-2 mx-4 mb-2 text-sm text-red-600">{{ inpaintError }}</p>
+          <div v-if="ocrItems.length || ocrError" class="mx-4 mb-3 text-xs text-slate-600">
+            <p v-if="ocrError" class="text-red-600 mb-1">{{ ocrError }}</p>
+            <div v-if="ocrItems.length" class="flex items-center justify-between">
+              <span>已辨識 {{ ocrItems.length }} 個文字區塊；點一下上遮罩，再點一次可移除。也可用「批次框選」一次套用多個區塊。</span>
+              <button type="button" class="text-slate-500 hover:text-slate-800 underline" @click="clearOcrItems">
+                清空辨識框
+              </button>
+            </div>
+          </div>
         </div>
 
         <div v-if="resultImageBlob" class="mt-5 bg-white rounded-xl shadow-sm border border-slate-200/80 p-4">

@@ -1,3 +1,4 @@
+import './emscripten-module-polyfill.js'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import './style.css'
