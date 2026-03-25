@@ -1,5 +1,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url'
 import PdfViewer from '../components/PdfViewer.vue'
 import PdfPageThumbnails from '../components/PdfPageThumbnails.vue'
 import MaskCanvas from '../components/MaskCanvas.vue'
@@ -9,6 +11,8 @@ import { useToast } from '../composables/useToast'
 import { useOcr } from '../composables/useOcr'
 import { inpaint } from '../api/inpaint'
 import { exportPdfFull, exportPptFull, exportPngZipFull } from '../api/export'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
 const store = usePdfInpaintStore()
 const toast = useToast()
@@ -20,27 +24,27 @@ const scale = ref(2)
 const brushSize = ref(24)
 const canvasSize = ref({ width: 0, height: 0 })
 const pageImageBlob = ref(null)
-const resultImageUrl = ref('') // object URL for 抹除結果區
-const appliedImageUrl = ref('') // object URL for 預覽區已套用圖
+const resultImageUrl = ref('')
+const appliedImageUrl = ref('')
 const inpaintLoading = ref(false)
 const inpaintError = ref('')
 const pdfViewerRef = ref(null)
 const maskCanvasRef = ref(null)
 const fileInputRef = ref(null)
 const isDragging = ref(false)
-/** 遮罩繪製模式：'brush' | 'eraser' | 'rectangle' | 'rectangleBatch' */
 const maskMode = ref('brush')
-const ocrItems = ref([])
-const ocrError = ref('')
-const selectedOcrIds = ref(new Set())
 const { loading: ocrLoading, recognizeFromBlob } = useOcr()
+const allOcrLoading = ref(false)
+const allOcrProgress = ref({ done: 0, total: 0 })
+let allOcrRunToken = 0
 
-/** 目前頁面的抹除結果（來自 store，換頁後仍保留） */
+const ocrItems = computed(() => store.getOcrItems(currentPage.value))
+const ocrError = computed(() => store.getOcrError(currentPage.value))
+const selectedOcrIds = computed(() => new Set(store.getSelectedOcrIds(currentPage.value)))
+
 const resultImageBlob = computed(() => store.getResult(currentPage.value))
-/** 目前頁面已套用的底圖（來自 store，換頁後仍保留） */
 const appliedImageBlob = computed(() => store.getApplied(currentPage.value))
 
-// 預覽區縮放：讓用戶放大處理細節
 const PREVIEW_ZOOM_MIN = 0.5
 const PREVIEW_ZOOM_MAX = 3
 const PREVIEW_ZOOM_STEP = 0.25
@@ -75,13 +79,13 @@ watch(appliedImageBlob, (blob) => {
   appliedImageUrl.value = blob ? URL.createObjectURL(blob) : ''
 }, { immediate: true })
 
-// 更換 PDF 時清空 store 與預覽相關狀態，避免與新檔混淆
 watch(pdfFile, () => {
   store.clearAll()
   pageImageBlob.value = null
   canvasSize.value = { width: 0, height: 0 }
-  ocrItems.value = []
-  selectedOcrIds.value = new Set()
+  allOcrLoading.value = false
+  allOcrProgress.value = { done: 0, total: 0 }
+  allOcrRunToken += 1
 })
 
 function updatePreviewViewportSize() {
@@ -152,10 +156,8 @@ function onPageImage(blob) {
   pageImageBlob.value = blob
 }
 
-/** 目前預覽／抹除使用的底圖：有套用過則用 store 內該頁的套用結果，否則用 PDF 頁面圖 */
 const effectivePageBlob = computed(() => appliedImageBlob.value || pageImageBlob.value)
 
-/** 畫布尺寸：有已套用圖時用 store 該頁儲存的尺寸，否則用 PdfViewer 即時回傳的 canvasSize */
 const effectiveCanvasSize = computed(() => {
   if (appliedImageBlob.value) {
     const dim = store.getDimensions(currentPage.value)
@@ -208,10 +210,9 @@ async function runInpaint() {
 function clearMask() {
   maskCanvasRef.value?.clearMask()
   store.clearMaskSnapshot(currentPage.value)
-  selectedOcrIds.value = new Set()
+  store.setSelectedOcrIds(currentPage.value, [])
 }
 
-/** 套用抹除結果：寫入 store，該頁預覽底圖改為結果圖，換頁後再回來仍保留 */
 function applyResult() {
   const blob = resultImageBlob.value
   if (!blob) return
@@ -242,12 +243,12 @@ function toggleOcrMask(item) {
   const next = new Set(selectedOcrIds.value)
   if (next.has(item.id)) {
     next.delete(item.id)
-    selectedOcrIds.value = next
+    store.setSelectedOcrIds(currentPage.value, Array.from(next))
     maskCanvasRef.value?.removeRectMask?.(rect)
   } else {
     maskCanvasRef.value?.applyRectMask?.(rect)
     next.add(item.id)
-    selectedOcrIds.value = next
+    store.setSelectedOcrIds(currentPage.value, Array.from(next))
   }
 }
 
@@ -275,38 +276,132 @@ function onMaskRectCommit(rect) {
     if (!r || !rectsIntersect(sel, r)) continue
     maskCanvasRef.value?.applyRectMask?.(r)
     next.add(item.id)
-    count++
+    count += 1
   }
-  selectedOcrIds.value = next
+  store.setSelectedOcrIds(currentPage.value, Array.from(next))
   if (count > 0) toast.success(`已為 ${count} 個 OCR 區塊加上遮罩`)
   else toast.error('框選範圍內沒有 OCR 區塊')
 }
 
-function clearOcrItems() {
-  ocrItems.value = []
-  selectedOcrIds.value = new Set()
-  ocrError.value = ''
+function clearOcrItems(pageNum = currentPage.value) {
+  store.clearOcrState(pageNum)
 }
 
 async function runOcr() {
   const base = effectivePageBlob.value
   if (!base) {
-    ocrError.value = '請先載入 PDF 並選擇頁面'
+    store.setOcrError(currentPage.value, '請先載入 PDF 並選擇頁面')
     return
   }
-  ocrError.value = ''
+  store.setOcrError(currentPage.value, '')
   try {
     const items = await recognizeFromBlob(base)
-    ocrItems.value = items
-    selectedOcrIds.value = new Set()
+    store.setOcrItems(currentPage.value, items)
+    store.setSelectedOcrIds(currentPage.value, [])
     if (!items.length) {
       toast.error('此頁未辨識到可用文字區塊')
     } else {
       toast.success(`辨識完成，共 ${items.length} 個區塊`)
     }
   } catch (e) {
-    ocrError.value = e?.message || String(e)
-    toast.error(ocrError.value)
+    const message = e?.message || String(e)
+    store.setOcrError(currentPage.value, message)
+    toast.error(message)
+  }
+}
+
+async function renderPdfPageBlob(doc, pageNum) {
+  const page = await doc.getPage(pageNum)
+  const viewport = page.getViewport({ scale: 1 })
+  const canvas = document.createElement('canvas')
+  canvas.width = viewport.width
+  canvas.height = viewport.height
+  const ctx = canvas.getContext('2d')
+  await page.render({
+    canvasContext: ctx,
+    viewport,
+  }).promise
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((out) => {
+      if (out) resolve(out)
+      else reject(new Error(`第 ${pageNum} 頁轉成圖片失敗`))
+    }, 'image/png', 1)
+  })
+
+  return {
+    blob,
+    width: viewport.width,
+    height: viewport.height,
+  }
+}
+
+async function getOcrSourceForPage(doc, pageNum) {
+  if (pageNum === currentPage.value && effectivePageBlob.value) {
+    return {
+      blob: effectivePageBlob.value,
+      width: effectiveCanvasSize.value.width,
+      height: effectiveCanvasSize.value.height,
+    }
+  }
+
+  const storedBlob = store.getApplied(pageNum) || store.getResult(pageNum)
+  const storedSize = store.getDimensions(pageNum)
+  if (storedBlob) {
+    return {
+      blob: storedBlob,
+      width: storedSize?.width || 0,
+      height: storedSize?.height || 0,
+    }
+  }
+
+  return renderPdfPageBlob(doc, pageNum)
+}
+
+async function runOcrAllPages() {
+  if (!pdfFile.value || totalPages.value === 0) {
+    toast.error('請先載入 PDF')
+    return
+  }
+
+  const runToken = ++allOcrRunToken
+  allOcrLoading.value = true
+  allOcrProgress.value = { done: 0, total: totalPages.value }
+
+  try {
+    const data = await pdfFile.value.arrayBuffer()
+    const doc = await pdfjsLib.getDocument({ data }).promise
+
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+      if (runToken !== allOcrRunToken) return
+
+      store.setOcrError(pageNum, '')
+      const { blob, width, height } = await getOcrSourceForPage(doc, pageNum)
+      if (width && height) {
+        store.setDimensions(pageNum, width, height)
+      }
+
+      try {
+        const items = await recognizeFromBlob(blob)
+        store.setOcrItems(pageNum, items)
+        store.setSelectedOcrIds(pageNum, [])
+      } catch (e) {
+        store.setOcrItems(pageNum, [])
+        store.setOcrError(pageNum, e?.message || String(e))
+      }
+
+      allOcrProgress.value = { done: pageNum, total: doc.numPages }
+    }
+
+    if (runToken !== allOcrRunToken) return
+    toast.success(`全部頁面辨識完成，共 ${doc.numPages} 頁`)
+  } catch (e) {
+    toast.error(e?.message || String(e))
+  } finally {
+    if (runToken === allOcrRunToken) {
+      allOcrLoading.value = false
+      allOcrProgress.value = { done: 0, total: totalPages.value }
+    }
   }
 }
 
@@ -329,7 +424,6 @@ watch(currentPage, async (nextPage, prevPage) => {
   if (prevPage && prevPage !== nextPage) {
     await saveMaskSnapshot(prevPage)
   }
-  clearOcrItems()
   await restoreMaskSnapshot(nextPage)
 })
 
@@ -341,17 +435,14 @@ watch(
   }
 )
 
-// 供 ExportButtons：目前頁面有結果則用該 blob，多頁時可改為依 store.pageNumbersWithContent 彙總
 const allPageBlobs = computed(() =>
   resultImageBlob.value ? [resultImageBlob.value] : []
 )
 
-/** 供 ExportButtons 取得當前遮罩 Blob（在 script 內使用 Promise 避免模板 scope 無 Promise） */
 function getMaskBlobForExport() {
   return maskCanvasRef.value?.getMaskBlob?.() ?? Promise.resolve(null)
 }
 
-/** 左側下載用：完整頁面替換表 (0-based 索引 → Blob)，僅包含有修改過的頁 */
 const fullExportReplacements = computed(() => {
   const out = {}
   for (const pageNum of store.pageNumbersWithContent) {
@@ -361,7 +452,7 @@ const fullExportReplacements = computed(() => {
   return out
 })
 
-const sidebarExporting = ref('') // 'pdf' | 'ppt' | ''
+const sidebarExporting = ref('')
 const sidebarMessage = ref('')
 
 async function sidebarDownloadPdf() {
@@ -374,7 +465,6 @@ async function sidebarDownloadPdf() {
   try {
     const blob = await exportPdfFull(pdfFile.value, fullExportReplacements.value)
     const url = URL.createObjectURL(blob)
-    // 快速網頁檢視：在新分頁開啟，由瀏覽器內建 PDF 檢視器顯示
     window.open(url, '_blank')
     const a = document.createElement('a')
     a.href = url
@@ -441,7 +531,6 @@ async function sidebarDownloadPngZip() {
   }
 }
 
-// 頁面比例 485 × 271 公釐（橫向），避免預覽比例失調
 const PAGE_ASPECT_RATIO = 485 / 271
 </script>
 
@@ -582,10 +671,18 @@ const PAGE_ASPECT_RATIO = 485 / 271
               <button
                 type="button"
                 class="px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
-                :disabled="!pdfFile || !effectivePageBlob || ocrLoading"
+                :disabled="!pdfFile || !effectivePageBlob || ocrLoading || allOcrLoading"
                 @click="runOcr"
               >
                 {{ ocrLoading ? '辨識中…' : '辨識' }}
+              </button>
+              <button
+                type="button"
+                class="px-4 py-2 rounded-lg bg-cyan-700 text-white hover:bg-cyan-600 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
+                :disabled="!pdfFile || totalPages === 0 || ocrLoading || allOcrLoading"
+                @click="runOcrAllPages"
+              >
+                {{ allOcrLoading ? `全部辨識中 ${allOcrProgress.done}/${allOcrProgress.total}` : '全部辨識' }}
               </button>
               <button
                 type="button"
@@ -713,6 +810,9 @@ const PAGE_ASPECT_RATIO = 485 / 271
           </div>
           </div>
           <p v-if="inpaintError" class="mt-2 mx-4 mb-2 text-sm text-red-600">{{ inpaintError }}</p>
+          <p v-if="allOcrLoading" class="mt-2 mx-4 text-xs text-cyan-700">
+            正在逐頁辨識，切換頁面不會中斷；目前進度 {{ allOcrProgress.done }} / {{ allOcrProgress.total }}。
+          </p>
           <div v-if="ocrItems.length || ocrError" class="mx-4 mb-3 text-xs text-slate-600">
             <p v-if="ocrError" class="text-red-600 mb-1">{{ ocrError }}</p>
             <div v-if="ocrItems.length" class="flex items-center justify-between">

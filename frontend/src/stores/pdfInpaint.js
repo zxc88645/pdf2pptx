@@ -14,6 +14,8 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
   const dimensionsByPage = ref({})
   /** 各頁遮罩快照（顯示層與匯出層），供切頁後還原 */
   const maskSnapshotByPage = ref({})
+  /** 各頁 OCR 區塊、錯誤與已選取區塊 */
+  const ocrStateByPage = ref({})
 
   function setDimensions(pageNum, width, height) {
     if (width && height) dimensionsByPage.value[pageNum] = { width, height }
@@ -53,12 +55,56 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
     delete maskSnapshotByPage.value[pageNum]
   }
 
+  function ensureOcrState(pageNum) {
+    if (!ocrStateByPage.value[pageNum]) {
+      ocrStateByPage.value[pageNum] = {
+        items: [],
+        error: '',
+        selectedIds: [],
+      }
+    }
+    return ocrStateByPage.value[pageNum]
+  }
+
+  function setOcrItems(pageNum, items) {
+    const state = ensureOcrState(pageNum)
+    state.items = Array.isArray(items) ? items : []
+    state.error = ''
+    state.selectedIds = state.selectedIds.filter((id) => state.items.some((item) => item.id === id))
+  }
+
+  function getOcrItems(pageNum) {
+    return ensureOcrState(pageNum).items
+  }
+
+  function setOcrError(pageNum, error) {
+    const state = ensureOcrState(pageNum)
+    state.error = error || ''
+  }
+
+  function getOcrError(pageNum) {
+    return ensureOcrState(pageNum).error
+  }
+
+  function setSelectedOcrIds(pageNum, ids) {
+    ensureOcrState(pageNum).selectedIds = Array.isArray(ids) ? ids : []
+  }
+
+  function getSelectedOcrIds(pageNum) {
+    return ensureOcrState(pageNum).selectedIds
+  }
+
+  function clearOcrState(pageNum) {
+    delete ocrStateByPage.value[pageNum]
+  }
+
   /** 更換 PDF 檔案時呼叫，清空所有頁面的套用／結果與尺寸，避免與新檔混淆 */
   function clearAll() {
     appliedByPage.value = {}
     resultByPage.value = {}
     dimensionsByPage.value = {}
     maskSnapshotByPage.value = {}
+    ocrStateByPage.value = {}
   }
 
   /** 目前有套用或結果的頁碼集合，供匯出多頁時使用 */
@@ -75,6 +121,7 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
     resultByPage,
     dimensionsByPage,
     maskSnapshotByPage,
+    ocrStateByPage,
     setDimensions,
     getDimensions,
     setApplied,
@@ -84,6 +131,13 @@ export const usePdfInpaintStore = defineStore('pdfInpaint', () => {
     setMaskSnapshot,
     getMaskSnapshot,
     clearMaskSnapshot,
+    setOcrItems,
+    getOcrItems,
+    setOcrError,
+    getOcrError,
+    setSelectedOcrIds,
+    getSelectedOcrIds,
+    clearOcrState,
     clearAll,
     pageNumbersWithContent,
   }

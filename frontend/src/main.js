@@ -1,4 +1,5 @@
 import './emscripten-module-polyfill.js'
+import './map-getorinsert-polyfill.js'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import './style.css'
