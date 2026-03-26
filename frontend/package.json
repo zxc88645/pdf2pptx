@@ -9,9 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@paddlejs-models/ocr": "^1.2.4",
-    "@paddlejs/paddlejs-backend-webgl": "^1.2.9",
     "axios": "^1.6.0",
+    "ffocr": "^0.1.9",
     "jszip": "^3.10.1",
     "pdfjs-dist": "^5.0.0",
     "pinia": "^3.0.4",

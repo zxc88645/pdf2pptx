@@ -817,7 +817,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
             <p v-if="ocrError" class="text-red-600 mb-1">{{ ocrError }}</p>
             <div v-if="ocrItems.length" class="flex items-center justify-between">
               <span>已辨識 {{ ocrItems.length }} 個文字區塊；點一下上遮罩，再點一次可移除。也可用「批次框選」一次套用多個區塊。</span>
-              <button type="button" class="text-slate-500 hover:text-slate-800 underline" @click="clearOcrItems">
+              <button type="button" class="text-slate-500 hover:text-slate-800 underline" @click="clearOcrItems()">
                 清空辨識框
               </button>
             </div>
