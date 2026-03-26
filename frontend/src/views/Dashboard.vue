@@ -283,6 +283,19 @@ function onMaskRectCommit(rect) {
   else toast.error('框選範圍內沒有 OCR 區塊')
 }
 
+function selectAllOcrItems() {
+  if (!ocrItems.value.length) return
+  const ids = []
+  for (const item of ocrItems.value) {
+    const rect = normalizeRect(item.rect)
+    if (!rect) continue
+    maskCanvasRef.value?.applyRectMask?.(rect)
+    ids.push(item.id)
+  }
+  store.setSelectedOcrIds(currentPage.value, ids)
+  toast.success(`已為 ${ids.length} 個 OCR 區塊加上遮罩`)
+}
+
 function clearOcrItems(pageNum = currentPage.value) {
   store.clearOcrState(pageNum)
 }
@@ -815,11 +828,24 @@ const PAGE_ASPECT_RATIO = 485 / 271
           </p>
           <div v-if="ocrItems.length || ocrError" class="mx-4 mb-3 text-xs text-slate-600">
             <p v-if="ocrError" class="text-red-600 mb-1">{{ ocrError }}</p>
-            <div v-if="ocrItems.length" class="flex items-center justify-between">
-              <span>已辨識 {{ ocrItems.length }} 個文字區塊；點一下上遮罩，再點一次可移除。也可用「批次框選」一次套用多個區塊。</span>
-              <button type="button" class="text-slate-500 hover:text-slate-800 underline" @click="clearOcrItems()">
-                清空辨識框
-              </button>
+            <div v-if="ocrItems.length" class="flex items-center justify-between gap-3">
+              <span class="flex-1 min-w-0">已辨識 {{ ocrItems.length }} 個文字區塊；點一下上遮罩，再點一次可移除。也可用「批次框選」一次套用多個區塊。</span>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 active:scale-[0.97] transition-all"
+                  @click="selectAllOcrItems()"
+                >
+                  全選
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 py-1 rounded-md text-xs font-medium bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 active:scale-[0.97] transition-all"
+                  @click="clearOcrItems()"
+                >
+                  清空辨識框
+                </button>
+              </div>
             </div>
           </div>
         </div>
