@@ -37,6 +37,9 @@ const { loading: ocrLoading, recognizeFromBlob } = useOcr()
 const allOcrLoading = ref(false)
 const allOcrProgress = ref({ done: 0, total: 0 })
 let allOcrRunToken = 0
+const autoPipelineLoading = ref(false)
+const autoPipelineProgress = ref({ done: 0, total: 0, phase: '' })
+let autoPipelineToken = 0
 
 const ocrItems = computed(() => store.getOcrItems(currentPage.value))
 const ocrError = computed(() => store.getOcrError(currentPage.value))
@@ -86,6 +89,9 @@ watch(pdfFile, () => {
   allOcrLoading.value = false
   allOcrProgress.value = { done: 0, total: 0 }
   allOcrRunToken += 1
+  autoPipelineLoading.value = false
+  autoPipelineProgress.value = { done: 0, total: 0, phase: '' }
+  autoPipelineToken += 1
 })
 
 function updatePreviewViewportSize() {
@@ -418,6 +424,105 @@ async function runOcrAllPages() {
   }
 }
 
+const MASK_EXPORT_MAX = 1024
+
+function buildMaskBlobFromRects(rects, imgWidth, imgHeight) {
+  const scale =
+    imgWidth <= MASK_EXPORT_MAX && imgHeight <= MASK_EXPORT_MAX
+      ? 1
+      : Math.min(MASK_EXPORT_MAX / imgWidth, MASK_EXPORT_MAX / imgHeight, 1)
+  const mw = Math.round(imgWidth * scale)
+  const mh = Math.round(imgHeight * scale)
+  const canvas = new OffscreenCanvas(mw, mh)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, mw, mh)
+  ctx.fillStyle = '#fff'
+  for (const r of rects) {
+    const x = Math.max(0, r.x) * scale
+    const y = Math.max(0, r.y) * scale
+    const w = Math.max(1, r.width * scale)
+    const h = Math.max(1, r.height * scale)
+    ctx.fillRect(x, y, w, h)
+  }
+  return canvas.convertToBlob({ type: 'image/png' })
+}
+
+function clampRect(rect, maxW, maxH) {
+  const x = Math.max(0, Math.min(maxW, Number(rect?.x ?? 0)))
+  const y = Math.max(0, Math.min(maxH, Number(rect?.y ?? 0)))
+  const w = Math.max(1, Math.min(maxW - x, Number(rect?.width ?? 0)))
+  const h = Math.max(1, Math.min(maxH - y, Number(rect?.height ?? 0)))
+  return { x, y, width: w, height: h }
+}
+
+async function runFullAutoPipeline() {
+  if (!pdfFile.value || totalPages.value === 0) {
+    toast.error('請先載入 PDF')
+    return
+  }
+
+  const runToken = ++autoPipelineToken
+  autoPipelineLoading.value = true
+  autoPipelineProgress.value = { done: 0, total: totalPages.value, phase: '準備中' }
+
+  try {
+    const data = await pdfFile.value.arrayBuffer()
+    const doc = await pdfjsLib.getDocument({ data }).promise
+
+    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+      if (runToken !== autoPipelineToken) return
+
+      autoPipelineProgress.value = { done: pageNum - 1, total: doc.numPages, phase: `第 ${pageNum} 頁：辨識中` }
+
+      const { blob: pageBlob, width, height } = await getOcrSourceForPage(doc, pageNum)
+      if (width && height) store.setDimensions(pageNum, width, height)
+
+      let items = []
+      try {
+        items = await recognizeFromBlob(pageBlob)
+        store.setOcrItems(pageNum, items)
+        store.setSelectedOcrIds(pageNum, items.map((i) => i.id))
+      } catch (e) {
+        store.setOcrItems(pageNum, [])
+        store.setOcrError(pageNum, e?.message || String(e))
+        autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+        continue
+      }
+
+      if (!items.length || !width || !height) {
+        autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+        continue
+      }
+
+      if (runToken !== autoPipelineToken) return
+      autoPipelineProgress.value = { done: pageNum - 1, total: doc.numPages, phase: `第 ${pageNum} 頁：抹除中` }
+
+      const rects = items.map((item) => clampRect(item.rect, width, height))
+      const maskBlob = await buildMaskBlobFromRects(rects, width, height)
+
+      try {
+        const resultBlob = await inpaint(pageBlob, maskBlob)
+        store.setResult(pageNum, resultBlob)
+      } catch (e) {
+        toast.error(`第 ${pageNum} 頁抹除失敗: ${e?.message || String(e)}`)
+      }
+
+      autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+    }
+
+    if (runToken !== autoPipelineToken) return
+    toast.success(`全部處理完成，共 ${doc.numPages} 頁，請逐頁確認後按「套用」`)
+  } catch (e) {
+    toast.error(e?.message || String(e))
+  } finally {
+    if (runToken === autoPipelineToken) {
+      autoPipelineLoading.value = false
+      autoPipelineProgress.value = { done: 0, total: 0, phase: '' }
+    }
+  }
+}
+
 async function saveMaskSnapshot(pageNum) {
   if (!pageNum || !maskCanvasRef.value?.exportMaskSnapshot) return
   const snapshot = maskCanvasRef.value.exportMaskSnapshot()
@@ -684,7 +789,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
               <button
                 type="button"
                 class="px-4 py-2 rounded-lg bg-sky-600 text-white hover:bg-sky-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
-                :disabled="!pdfFile || !effectivePageBlob || ocrLoading || allOcrLoading"
+                :disabled="!pdfFile || !effectivePageBlob || ocrLoading || allOcrLoading || autoPipelineLoading"
                 @click="runOcr"
               >
                 {{ ocrLoading ? '辨識中…' : '辨識' }}
@@ -692,7 +797,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
               <button
                 type="button"
                 class="px-4 py-2 rounded-lg bg-cyan-700 text-white hover:bg-cyan-600 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
-                :disabled="!pdfFile || totalPages === 0 || ocrLoading || allOcrLoading"
+                :disabled="!pdfFile || totalPages === 0 || ocrLoading || allOcrLoading || autoPipelineLoading"
                 @click="runOcrAllPages"
               >
                 {{ allOcrLoading ? `全部辨識中 ${allOcrProgress.done}/${allOcrProgress.total}` : '全部辨識' }}
@@ -700,7 +805,7 @@ const PAGE_ASPECT_RATIO = 485 / 271
               <button
                 type="button"
                 class="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
-                :disabled="!pdfFile || inpaintLoading"
+                :disabled="!pdfFile || inpaintLoading || autoPipelineLoading"
                 @click="runInpaint"
               >
                 {{ inpaintLoading ? '運算中…' : '執行 AI 抹除' }}
@@ -712,6 +817,15 @@ const PAGE_ASPECT_RATIO = 485 / 271
                 @click="clearMask"
               >
                 清除遮罩
+              </button>
+              <div class="h-5 w-px bg-slate-300 hidden sm:block" aria-hidden="true" />
+              <button
+                type="button"
+                class="px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 active:scale-[0.98] transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:pointer-events-none"
+                :disabled="!pdfFile || totalPages === 0 || autoPipelineLoading || ocrLoading || allOcrLoading || inpaintLoading"
+                @click="runFullAutoPipeline"
+              >
+                {{ autoPipelineLoading ? `一鍵處理中 ${autoPipelineProgress.done}/${autoPipelineProgress.total}` : '一鍵全頁處理' }}
               </button>
             </div>
           </div>
@@ -825,6 +939,9 @@ const PAGE_ASPECT_RATIO = 485 / 271
           <p v-if="inpaintError" class="mt-2 mx-4 mb-2 text-sm text-red-600">{{ inpaintError }}</p>
           <p v-if="allOcrLoading" class="mt-2 mx-4 text-xs text-cyan-700">
             正在逐頁辨識，切換頁面不會中斷；目前進度 {{ allOcrProgress.done }} / {{ allOcrProgress.total }}。
+          </p>
+          <p v-if="autoPipelineLoading" class="mt-2 mx-4 text-xs text-violet-700">
+            一鍵處理中：{{ autoPipelineProgress.phase || '準備中' }}（{{ autoPipelineProgress.done }} / {{ autoPipelineProgress.total }}）。完成後請逐頁確認結果並按「套用」。
           </p>
           <div v-if="ocrItems.length || ocrError" class="mx-4 mb-3 text-xs text-slate-600">
             <p v-if="ocrError" class="text-red-600 mb-1">{{ ocrError }}</p>
