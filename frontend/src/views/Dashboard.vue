@@ -425,6 +425,13 @@ async function runOcrAllPages() {
 }
 
 const MASK_EXPORT_MAX = 1024
+const AUTO_PIPELINE_MAX_CONCURRENCY = 10
+
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
+}
 
 function buildMaskBlobFromRects(rects, imgWidth, imgHeight) {
   const scale =
@@ -469,14 +476,59 @@ async function runFullAutoPipeline() {
   try {
     const data = await pdfFile.value.arrayBuffer()
     const doc = await pdfjsLib.getDocument({ data }).promise
+    const total = doc.numPages
+    const concurrency = Math.min(AUTO_PIPELINE_MAX_CONCURRENCY, total)
+    const failedPages = []
+    let doneCount = 0
+    let activeInpaint = 0
+    const inpaintWaiters = []
+    const inpaintTasks = []
 
-    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+    const updateProgress = (phase) => {
       if (runToken !== autoPipelineToken) return
+      autoPipelineProgress.value = { done: doneCount, total, phase }
+    }
 
-      autoPipelineProgress.value = { done: pageNum - 1, total: doc.numPages, phase: `第 ${pageNum} 頁：辨識中` }
+    const acquireInpaintSlot = async () => {
+      if (activeInpaint < concurrency) {
+        activeInpaint += 1
+        return
+      }
+      await new Promise((resolve) => inpaintWaiters.push(resolve))
+      activeInpaint += 1
+    }
 
-      const { blob: pageBlob, width, height } = await getOcrSourceForPage(doc, pageNum)
-      if (width && height) store.setDimensions(pageNum, width, height)
+    const releaseInpaintSlot = () => {
+      activeInpaint = Math.max(0, activeInpaint - 1)
+      const next = inpaintWaiters.shift()
+      if (next) next()
+    }
+
+    const markPageDone = () => {
+      doneCount += 1
+      updateProgress(`抹除佇列處理中（最多 ${concurrency} 頁）`)
+    }
+
+    for (let pageNum = 1; pageNum <= total; pageNum += 1) {
+      if (runToken !== autoPipelineToken) return
+      updateProgress(`第 ${pageNum} 頁：辨識與遮罩準備中`)
+      await yieldToBrowser()
+
+      store.setOcrError(pageNum, '')
+      let pageBlob
+      let width
+      let height
+      try {
+        const source = await getOcrSourceForPage(doc, pageNum)
+        pageBlob = source.blob
+        width = source.width
+        height = source.height
+        if (width && height) store.setDimensions(pageNum, width, height)
+      } catch (e) {
+        failedPages.push({ pageNum, stage: '取頁面', message: e?.message || String(e) })
+        markPageDone()
+        continue
+      }
 
       let items = []
       try {
@@ -484,35 +536,57 @@ async function runFullAutoPipeline() {
         store.setOcrItems(pageNum, items)
         store.setSelectedOcrIds(pageNum, items.map((i) => i.id))
       } catch (e) {
+        const message = e?.message || String(e)
         store.setOcrItems(pageNum, [])
-        store.setOcrError(pageNum, e?.message || String(e))
-        autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+        store.setOcrError(pageNum, message)
+        failedPages.push({ pageNum, stage: 'OCR', message })
+        markPageDone()
         continue
       }
 
       if (!items.length || !width || !height) {
-        autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+        markPageDone()
         continue
       }
 
-      if (runToken !== autoPipelineToken) return
-      autoPipelineProgress.value = { done: pageNum - 1, total: doc.numPages, phase: `第 ${pageNum} 頁：抹除中` }
-
-      const rects = items.map((item) => clampRect(item.rect, width, height))
-      const maskBlob = await buildMaskBlobFromRects(rects, width, height)
-
+      let maskBlob
       try {
-        const resultBlob = await inpaint(pageBlob, maskBlob)
-        store.setResult(pageNum, resultBlob)
+        const rects = items.map((item) => clampRect(item.rect, width, height))
+        maskBlob = await buildMaskBlobFromRects(rects, width, height)
       } catch (e) {
-        toast.error(`第 ${pageNum} 頁抹除失敗: ${e?.message || String(e)}`)
+        failedPages.push({ pageNum, stage: '遮罩', message: e?.message || String(e) })
+        markPageDone()
+        continue
       }
 
-      autoPipelineProgress.value = { done: pageNum, total: doc.numPages, phase: '' }
+      const task = (async () => {
+        await acquireInpaintSlot()
+        try {
+          if (runToken !== autoPipelineToken) return
+          const resultBlob = await inpaint(pageBlob, maskBlob)
+          store.setResult(pageNum, resultBlob)
+        } catch (e) {
+          failedPages.push({ pageNum, stage: '抹除', message: e?.message || String(e) })
+        } finally {
+          releaseInpaintSlot()
+          markPageDone()
+        }
+      })()
+      inpaintTasks.push(task)
     }
 
+    await Promise.all(inpaintTasks)
+
     if (runToken !== autoPipelineToken) return
-    toast.success(`全部處理完成，共 ${doc.numPages} 頁，請逐頁確認後按「套用」`)
+    if (failedPages.length) {
+      const pages = failedPages
+        .map((item) => item.pageNum)
+        .sort((a, b) => a - b)
+        .join('、')
+      toast.error(`處理完成，共 ${total} 頁；失敗 ${failedPages.length} 頁（${pages}）`)
+    } else {
+      toast.success(`全部處理完成，共 ${total} 頁，請逐頁確認後按「套用」`)
+    }
   } catch (e) {
     toast.error(e?.message || String(e))
   } finally {
