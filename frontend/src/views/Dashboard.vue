@@ -11,6 +11,7 @@ import { useToast } from '../composables/useToast'
 import { useOcr } from '../composables/useOcr'
 import { inpaint } from '../api/inpaint'
 import { exportPdfFull, exportPptFull, exportPngZipFull } from '../api/export'
+import { apiUrl, getApiBaseUrl, getEnvApiBaseUrl, getStoredApiBaseUrl, setApiBaseUrl, clearApiBaseUrl } from '../api/baseUrl'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker
 
@@ -40,6 +41,64 @@ let allOcrRunToken = 0
 const autoPipelineLoading = ref(false)
 const autoPipelineProgress = ref({ done: 0, total: 0, phase: '' })
 let autoPipelineToken = 0
+
+const showSettings = ref(false)
+const backendUrlDraft = ref('')
+const backendUrlSaving = ref(false)
+const backendUrlTesting = ref(false)
+const backendUrlTestResult = ref({ ok: null, message: '' })
+
+const storedApiBaseUrl = computed(() => getStoredApiBaseUrl())
+const envApiBaseUrl = computed(() => getEnvApiBaseUrl())
+const effectiveApiBaseUrl = computed(() => getApiBaseUrl())
+
+watch(showSettings, (open) => {
+  if (!open) return
+  backendUrlDraft.value = storedApiBaseUrl.value || envApiBaseUrl.value || ''
+  backendUrlTestResult.value = { ok: null, message: '' }
+})
+
+async function saveBackendUrl() {
+  backendUrlSaving.value = true
+  try {
+    const next = setApiBaseUrl(backendUrlDraft.value)
+    toast.success(next ? '已儲存後端網址' : '已改回使用相對路徑（同網域）')
+    showSettings.value = false
+  } finally {
+    backendUrlSaving.value = false
+  }
+}
+
+function resetBackendUrl() {
+  clearApiBaseUrl()
+  backendUrlDraft.value = envApiBaseUrl.value || ''
+  backendUrlTestResult.value = { ok: null, message: '' }
+  toast.success('已清除自訂設定')
+}
+
+async function testBackendUrl() {
+  backendUrlTesting.value = true
+  backendUrlTestResult.value = { ok: null, message: '' }
+  const prev = storedApiBaseUrl.value
+  try {
+    setApiBaseUrl(backendUrlDraft.value)
+    const res = await fetch(apiUrl('/health'))
+    if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
+    const data = await res.json().catch(() => ({}))
+    backendUrlTestResult.value = {
+      ok: true,
+      message: `連線成功：status=${data?.status ?? 'ok'}，cuda_available=${String(data?.cuda_available ?? 'unknown')}`,
+    }
+    toast.success('後端連線成功')
+  } catch (e) {
+    backendUrlTestResult.value = { ok: false, message: e?.message || String(e) }
+    toast.error('後端連線失敗：' + (e?.message || String(e)))
+    if (prev) setApiBaseUrl(prev)
+    else clearApiBaseUrl()
+  } finally {
+    backendUrlTesting.value = false
+  }
+}
 
 const ocrItems = computed(() => store.getOcrItems(currentPage.value))
 const ocrError = computed(() => store.getOcrError(currentPage.value))
@@ -729,8 +788,19 @@ const PAGE_ASPECT_RATIO = 485 / 271
 <template>
   <div class="min-h-screen bg-slate-100">
     <header class="bg-slate-800 text-white px-6 py-5 shadow-lg">
-      <h1 class="text-2xl font-bold tracking-tight">PDF 抹除儀表板</h1>
-      <p class="text-slate-300 text-sm mt-1.5">載入 PDF → 選擇頁面 → OCR 辨識區塊上遮罩 / 手動畫遮罩 → AI 抹除 → 輸出 PDF / PPT / 剪貼簿</p>
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">PDF 抹除儀表板</h1>
+          <p class="text-slate-300 text-sm mt-1.5">載入 PDF → 選擇頁面 → OCR 辨識區塊上遮罩 / 手動畫遮罩 → AI 抹除 → 輸出 PDF / PPT / 剪貼簿</p>
+        </div>
+        <button
+          type="button"
+          class="px-4 py-2 rounded-lg bg-slate-700/80 hover:bg-slate-700 active:scale-[0.98] transition-all text-sm font-semibold border border-slate-600"
+          @click="showSettings = true"
+        >
+          設定
+        </button>
+      </div>
     </header>
 
     <div class="flex flex-1 gap-5 p-5">
@@ -1071,6 +1141,88 @@ const PAGE_ASPECT_RATIO = 485 / 271
           </div>
         </div>
       </main>
+    </div>
+
+    <!-- 設定：後端網址 -->
+    <div
+      v-if="showSettings"
+      class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      tabindex="0"
+      @keydown.esc="showSettings = false"
+    >
+      <div class="absolute inset-0 bg-slate-900/50" @click="showSettings = false"></div>
+      <div class="relative w-full max-w-xl bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 bg-slate-50 border-b border-slate-200 flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-semibold text-slate-800">設定</h2>
+            <p class="text-xs text-slate-500 mt-0.5">自訂後端網址（用於 `/api/*` 與 `/health`）</p>
+          </div>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 active:scale-[0.98] transition-all"
+            @click="showSettings = false"
+          >
+            關閉
+          </button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="block text-sm font-semibold text-slate-800 mb-2">後端網址（Base URL）</label>
+            <input
+              v-model="backendUrlDraft"
+              type="text"
+              inputmode="url"
+              placeholder="例如 http://localhost:8000（留空表示使用同網域相對路徑）"
+              class="w-full px-4 py-2.5 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500"
+            />
+            <div class="mt-2 text-xs text-slate-600 space-y-1">
+              <p><span class="font-semibold">目前生效</span>：<span class="font-mono">{{ effectiveApiBaseUrl || '(相對路徑)' }}</span></p>
+              <p><span class="font-semibold">已儲存覆寫</span>：<span class="font-mono">{{ storedApiBaseUrl || '(無)' }}</span></p>
+              <p><span class="font-semibold">環境預設</span>：<span class="font-mono">{{ envApiBaseUrl || '(無)' }}</span></p>
+              <p class="text-slate-500">提示：不要以 `/` 結尾，例如 `http://localhost:8000`</p>
+            </div>
+          </div>
+
+          <div v-if="backendUrlTestResult.ok !== null" class="text-sm">
+            <div
+              class="px-4 py-3 rounded-lg border"
+              :class="backendUrlTestResult.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'"
+            >
+              {{ backendUrlTestResult.message }}
+            </div>
+          </div>
+
+          <div class="flex flex-wrap gap-3 justify-end pt-1">
+            <button
+              type="button"
+              class="px-4 py-2.5 rounded-lg border-2 border-slate-300 bg-white hover:bg-slate-50 hover:border-slate-400 active:scale-[0.98] transition-all text-slate-700 font-medium"
+              :disabled="backendUrlSaving || backendUrlTesting"
+              @click="resetBackendUrl"
+            >
+              清除自訂
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2.5 rounded-lg bg-slate-700 text-white hover:bg-slate-600 active:scale-[0.98] transition-all font-medium disabled:opacity-50 disabled:active:scale-100"
+              :disabled="backendUrlSaving || backendUrlTesting"
+              @click="testBackendUrl"
+            >
+              {{ backendUrlTesting ? '測試中…' : '測試 /health' }}
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 active:scale-[0.98] transition-all font-semibold shadow-sm disabled:opacity-50 disabled:active:scale-100"
+              :disabled="backendUrlSaving || backendUrlTesting"
+              @click="saveBackendUrl"
+            >
+              {{ backendUrlSaving ? '儲存中…' : '儲存' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

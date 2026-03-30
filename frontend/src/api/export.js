@@ -1,8 +1,4 @@
-const baseURL = import.meta.env.VITE_API_BASE || ''
-
-function apiUrl(path) {
-  return baseURL ? `${baseURL}${path}` : path
-}
+import { apiUrl } from './baseUrl'
 
 /**
  * 多張圖片 → 下載 PDF

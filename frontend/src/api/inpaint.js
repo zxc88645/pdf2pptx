@@ -1,3 +1,5 @@
+import { apiUrl } from './baseUrl'
+
 /**
  * 從圖片 blob 取得實際寬高（用於確保 mask 與底圖尺寸一致）
  * @param {Blob|File} imageBlob
@@ -41,9 +43,7 @@ export async function inpaint(imageBlob, maskBlob) {
   const form = new FormData()
   form.append('image', imageBlob, 'image.png')
   form.append('mask', resizedMask, 'mask.png')
-  const baseURL = import.meta.env.VITE_API_BASE || ''
-  const url = baseURL ? `${baseURL}/api/inpaint` : '/api/inpaint'
-  const res = await fetch(url, {
+  const res = await fetch(apiUrl('/api/inpaint'), {
     method: 'POST',
     body: form,
   })
